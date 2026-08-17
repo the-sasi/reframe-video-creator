@@ -1,11 +1,14 @@
+import AVFoundation
+import ImageIO
 import Photos
 import PhotosUI
 import ReframeKit
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Photos in, words in. Two sections, no ceremony.
+/// Photos and clips in, words in. Two sections, no ceremony.
 ///
-/// The slot count from the recipe drives the prompt ("12 slots — add about 12 photos"), and the
+/// The slot count from the recipe drives the prompt ("12 slots — add about 12"), and the
 /// reference's character count drives the placeholder, so copy gets written to fit the layout
 /// rather than being truncated later.
 struct ContentImportView: View {
@@ -15,6 +18,8 @@ struct ContentImportView: View {
     @State private var logoItem: PhotosPickerItem?
     @State private var isLoading = false
     @State private var isPreparing = false
+    @State private var authorization: PHAuthorizationStatus = .notDetermined
+    @State private var lastImportNote: String?
 
     private var slotCount: Int { model.recipe?.assetSlotCount ?? 0 }
     private var hasEnoughAssets: Bool { !model.assets.visuals.isEmpty }
@@ -22,7 +27,10 @@ struct ContentImportView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.l) {
-                photosSection
+                if authorization == .denied || authorization == .restricted {
+                    permissionBanner
+                }
+                mediaSection
                 if let recipe = model.recipe, !recipe.fillableTextSlots.isEmpty {
                     textSection(recipe)
                 }
@@ -47,8 +55,15 @@ struct ContentImportView: View {
             .padding(Theme.Space.m)
             .background(.regularMaterial)
         }
+        .task {
+            // `photoLibrary: .shared()` below needs real authorisation, otherwise every picked
+            // item comes back without an identifier and silently vanishes.
+            authorization = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+            DiagnosticsLog.shared.info("content", "photo authorisation: \(authorization.rawValue)")
+        }
         .onChange(of: photoItems) { _, items in
-            Task { await loadPhotos(items) }
+            guard !items.isEmpty else { return }
+            Task { await loadPicked(items) }
         }
         .onChange(of: logoItem) { _, item in
             guard let item else { return }
@@ -56,12 +71,43 @@ struct ContentImportView: View {
         }
     }
 
-    // MARK: - Photos
+    // MARK: - Permission
 
-    private var photosSection: some View {
+    private var permissionBanner: some View {
+        HStack(alignment: .top, spacing: Theme.Space.m) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(Theme.Palette.warning)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Photos access is off")
+                    .font(.system(.subheadline, design: .rounded, weight: .medium))
+                Text("Reframe can't read the photos you pick. Nothing is ever uploaded — everything stays on this iPhone.")
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.Palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                .font(.system(.caption, design: .rounded, weight: .semibold))
+                .foregroundStyle(Theme.Palette.accent)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(Theme.Space.m)
+        .background(
+            Theme.Palette.warning.opacity(0.12),
+            in: RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
+        )
+    }
+
+    // MARK: - Media
+
+    private var mediaSection: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack {
-                Text("Photos & video").font(Theme.Font.sectionTitle)
+                Text("Photos & videos").font(Theme.Font.sectionTitle)
                 Spacer()
                 if slotCount > 0 {
                     Text("\(model.assets.visuals.count) / \(slotCount)")
@@ -80,34 +126,51 @@ struct ContentImportView: View {
                     .foregroundStyle(Theme.Palette.secondaryText)
             }
 
+            if let lastImportNote {
+                Text(lastImportNote)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.Palette.warning)
+            }
+
             if model.assets.visuals.isEmpty {
-                PhotosPicker(
-                    selection: $photoItems,
-                    maxSelectionCount: 40,
-                    selectionBehavior: .ordered,
-                    matching: .any(of: [.images, .videos])
-                ) {
+                picker {
                     EmptyStateView(
                         systemImage: "photo.stack",
-                        title: "Add your photos",
+                        title: "Add photos or videos",
                         message: slotCount > 0
-                            ? "This style has \(slotCount) slots. Pick around that many."
+                            ? "This style has \(slotCount) slots. Pick around that many — photos, clips, or a mix."
                             : "Pick the photos and clips you want in the video."
                     )
                     .cardSurface()
                 }
-                .disabled(isLoading)
             } else {
                 assetGrid
             }
         }
     }
 
+    /// One picker definition, used in both the empty and populated states.
+    ///
+    /// `photoLibrary: .shared()` is the important part: without it the picker runs
+    /// out-of-process, `itemIdentifier` is nil for every result, and items are dropped without
+    /// any visible error.
+    private func picker<Label: View>(@ViewBuilder label: () -> Label) -> some View {
+        PhotosPicker(
+            selection: $photoItems,
+            maxSelectionCount: 40,
+            selectionBehavior: .ordered,
+            matching: .any(of: [.images, .videos]),
+            photoLibrary: .shared(),
+            label: label
+        )
+        .disabled(isLoading)
+    }
+
     private var guidance: String {
         let have = model.assets.visuals.count
-        if have == 0 { return "Pick around \(slotCount) photos — you can add more later." }
+        if have == 0 { return "Pick around \(slotCount) — you can add more later." }
         if have < slotCount {
-            return "\(slotCount - have) more would fill every slot. Reframe can repeat photos, but it looks better with more."
+            return "\(slotCount - have) more would fill every slot. Reframe can repeat items, but it looks better with more."
         }
         if have > slotCount {
             return "More than enough — Reframe will pick the \(slotCount) that fit best."
@@ -132,13 +195,8 @@ struct ContentImportView: View {
                 }
             }
 
-            PhotosPicker(
-                selection: $photoItems,
-                maxSelectionCount: 40,
-                selectionBehavior: .ordered,
-                matching: .any(of: [.images, .videos])
-            ) {
-                Label("Add more", systemImage: "plus")
+            picker {
+                Label(isLoading ? "Adding…" : "Add more", systemImage: isLoading ? "hourglass" : "plus")
                     .font(.system(.subheadline, design: .rounded, weight: .medium))
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
@@ -147,7 +205,6 @@ struct ContentImportView: View {
                         in: RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
                     )
             }
-            .disabled(isLoading)
         }
     }
 
@@ -185,9 +242,7 @@ struct ContentImportView: View {
                             )
                         )
                         .font(Theme.Font.body)
-                        .textInputAutocapitalization(
-                            slot.role == .cta ? .characters : .sentences
-                        )
+                        .textInputAutocapitalization(slot.role == .cta ? .characters : .sentences)
                         .padding(Theme.Space.m)
                         .background(
                             Theme.Palette.surface,
@@ -205,7 +260,11 @@ struct ContentImportView: View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text("Optional").font(Theme.Font.sectionTitle)
 
-            PhotosPicker(selection: $logoItem, matching: .images) {
+            PhotosPicker(
+                selection: $logoItem,
+                matching: .images,
+                photoLibrary: .shared()
+            ) {
                 HStack(spacing: Theme.Space.m) {
                     Image(systemName: "seal")
                         .foregroundStyle(Theme.Palette.accent)
@@ -242,34 +301,67 @@ struct ContentImportView: View {
         }
     }
 
-    // MARK: - Loading
+    // MARK: - Import
 
-    private func loadPhotos(_ items: [PhotosPickerItem]) async {
+    private func loadPicked(_ items: [PhotosPickerItem]) async {
         isLoading = true
+        lastImportNote = nil
         defer { isLoading = false }
 
+        var added = 0
+        var copied = 0
+        var failed = 0
+
         for item in items {
-            guard let identifier = item.itemIdentifier else { continue }
-            guard !model.assets.assets.contains(where: {
-                $0.origin == .photoLibrary(localIdentifier: identifier)
-            }) else { continue }
-            guard let reference = Self.reference(forLocalIdentifier: identifier) else { continue }
-            model.assets.add(reference)
+            // Preferred path: reference the library asset by identifier, copying nothing.
+            if let identifier = item.itemIdentifier,
+               let reference = Self.libraryReference(for: identifier) {
+                if !model.assets.assets.contains(where: { $0.origin == reference.origin }) {
+                    model.assets.add(reference)
+                    added += 1
+                }
+                continue
+            }
+
+            // Fallback: no identifier — Limited Library access, an iCloud-only item, or a
+            // picker that declined to hand one over. Copy the file into the sandbox instead so
+            // the import still succeeds rather than silently dropping the item.
+            if let reference = await Self.copiedReference(from: item) {
+                model.assets.add(reference)
+                copied += 1
+            } else {
+                failed += 1
+            }
         }
+
         photoItems.removeAll()
+
+        DiagnosticsLog.shared.info(
+            "content",
+            "import: \(added) referenced, \(copied) copied, \(failed) failed (of \(items.count))"
+        )
+
+        if failed > 0 {
+            lastImportNote = "\(failed) item\(failed == 1 ? "" : "s") couldn't be read — they may still be downloading from iCloud."
+        }
     }
 
     private func loadLogo(_ item: PhotosPickerItem) async {
-        guard let identifier = item.itemIdentifier,
-              let reference = Self.reference(forLocalIdentifier: identifier) else { return }
+        let reference: AssetReference?
+        if let identifier = item.itemIdentifier {
+            reference = Self.libraryReference(for: identifier)
+        } else {
+            reference = await Self.copiedReference(from: item)
+        }
+        guard let reference else { return }
         model.assets.add(reference)
         model.content.logoAssetID = reference.id
         logoItem = nil
     }
 
-    /// Builds an `AssetReference` from a Photos identifier. Reads dimensions from `PHAsset`
-    /// rather than by decoding, so adding 40 photos costs no image decoding at all.
-    private static func reference(forLocalIdentifier identifier: String) -> AssetReference? {
+    /// Builds a reference from a Photos identifier, reading dimensions from `PHAsset` rather
+    /// than by decoding — so adding 40 items costs no image decoding at all.
+    private static func libraryReference(for identifier: String) -> AssetReference? {
         let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
         guard let phAsset = fetch.firstObject else { return nil }
 
@@ -284,7 +376,7 @@ struct ContentImportView: View {
         return AssetReference(
             kind: kind,
             origin: .photoLibrary(localIdentifier: identifier),
-            displayName: phAsset.value(forKey: "filename") as? String ?? "Photo",
+            displayName: (phAsset.value(forKey: "filename") as? String) ?? "Item",
             pixelWidth: phAsset.pixelWidth,
             pixelHeight: phAsset.pixelHeight,
             duration: phAsset.duration,
@@ -292,13 +384,103 @@ struct ContentImportView: View {
         )
     }
 
+    /// Copies a picked item into the sandbox and measures it. Slower and uses disk, which is
+    /// why it is the fallback rather than the default.
+    private static func copiedReference(from item: PhotosPickerItem) async -> AssetReference? {
+        guard let media = try? await item.loadTransferable(type: PickedMedia.self) else {
+            return nil
+        }
+
+        let isVideo = media.url.pathExtension.lowercased() != "jpg"
+            && ["mov", "mp4", "m4v"].contains(media.url.pathExtension.lowercased())
+
+        var width = 0
+        var height = 0
+        var duration = 0.0
+
+        if isVideo {
+            let asset = AVURLAsset(url: media.url)
+            if let track = try? await asset.loadTracks(withMediaType: .video).first,
+               let size = try? await track.load(.naturalSize),
+               let transform = try? await track.load(.preferredTransform) {
+                let presented = size.applying(transform)
+                width = Int(abs(presented.width).rounded())
+                height = Int(abs(presented.height).rounded())
+            }
+            duration = (try? await asset.load(.duration).seconds) ?? 0
+        } else if let source = CGImageSourceCreateWithURL(media.url as CFURL, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
+            width = (properties[kCGImagePropertyPixelWidth] as? Int) ?? 0
+            height = (properties[kCGImagePropertyPixelHeight] as? Int) ?? 0
+        }
+
+        guard width > 0, height > 0 else { return nil }
+
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let relative = "ImportedMedia/\(media.url.lastPathComponent)"
+        let destination = documents.appendingPathComponent(relative)
+        try? FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try? FileManager.default.removeItem(at: destination)
+        guard (try? FileManager.default.moveItem(at: media.url, to: destination)) != nil else {
+            return nil
+        }
+
+        return AssetReference(
+            kind: isVideo ? .video : .image,
+            origin: .sandboxRelativePath(relative),
+            displayName: media.url.lastPathComponent,
+            pixelWidth: width,
+            pixelHeight: height,
+            duration: duration
+        )
+    }
+
     private func arrange() async {
         isPreparing = true
         defer { isPreparing = false }
 
+        DiagnosticsLog.shared.info(
+            "content",
+            "arranging \(model.assets.visuals.count) assets into \(slotCount) slots"
+        )
         await model.autoArrange()
         model.bindTimeline()
         model.path.append(.mapping)
+    }
+}
+
+/// Carries a picked photo or video out of the picker as a file we control.
+///
+/// Both representations are declared because `.any(of: [.images, .videos])` can hand back
+/// either, and a movie has no useful `Data` representation at 4K.
+struct PickedMedia: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { media in
+            SentTransferredFile(media.url)
+        } importing: { received in
+            PickedMedia(url: try Self.stage(received.file, fallbackExtension: "mov"))
+        }
+
+        FileRepresentation(contentType: .image) { media in
+            SentTransferredFile(media.url)
+        } importing: { received in
+            PickedMedia(url: try Self.stage(received.file, fallbackExtension: "jpg"))
+        }
+    }
+
+    /// The picker deletes its temporary file the moment the transfer completes, so it has to be
+    /// moved somewhere we own before anything else touches it.
+    private static func stage(_ file: URL, fallbackExtension: String) throws -> URL {
+        let ext = file.pathExtension.isEmpty ? fallbackExtension : file.pathExtension
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("picked-\(UUID().uuidString).\(ext)")
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.copyItem(at: file, to: destination)
+        return destination
     }
 }
 
@@ -312,9 +494,7 @@ private struct AssetThumbnail: View {
             .aspectRatio(1, contentMode: .fit)
             .overlay {
                 if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
+                    Image(uiImage: image).resizable().scaledToFill()
                 } else {
                     ProgressView().controlSize(.small)
                 }
@@ -334,16 +514,30 @@ private struct AssetThumbnail: View {
     }
 
     private func load() async {
-        guard image == nil, case .photoLibrary(let identifier) = asset.origin else { return }
-        let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
-        guard let phAsset = fetch.firstObject else { return }
+        guard image == nil else { return }
+
+        switch asset.origin {
+        case .photoLibrary(let identifier):
+            image = await Self.libraryThumbnail(identifier)
+        case .sandboxRelativePath(let path):
+            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            image = Self.fileThumbnail(documents.appendingPathComponent(path), isVideo: asset.kind == .video)
+        case .fileBookmark:
+            image = nil
+        }
+    }
+
+    private static func libraryThumbnail(_ identifier: String) async -> UIImage? {
+        guard let phAsset = PHAsset.fetchAssets(
+            withLocalIdentifiers: [identifier], options: nil
+        ).firstObject else { return nil }
 
         let options = PHImageRequestOptions()
         options.isNetworkAccessAllowed = false
         options.deliveryMode = .opportunistic
         options.resizeMode = .fast
 
-        image = await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { continuation in
             var resumed = false
             PHImageManager.default().requestImage(
                 for: phAsset,
@@ -357,5 +551,28 @@ private struct AssetThumbnail: View {
                 continuation.resume(returning: result)
             }
         }
+    }
+
+    private static func fileThumbnail(_ url: URL, isVideo: Bool) -> UIImage? {
+        if isVideo {
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 200, height: 200)
+            guard let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) else {
+                return nil
+            }
+            return UIImage(cgImage: cgImage)
+        }
+
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let thumbnail = CGImageSourceCreateThumbnailAtIndex(
+                source, 0,
+                [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 200,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                ] as CFDictionary
+              ) else { return nil }
+        return UIImage(cgImage: thumbnail)
     }
 }
