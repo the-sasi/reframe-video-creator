@@ -1,0 +1,68 @@
+name: CI
+
+# Compiles the whole project on a real macOS toolchain — which is the only place it can be
+# compiled. The engine tests need no simulator and no device, so they run first and fast; the
+# app build proves the SwiftUI layer and the Metal shaders are valid.
+#
+# Nothing here needs a signing identity: CODE_SIGNING_ALLOWED=NO builds the app without any
+# certificate or provisioning profile. That is what makes full compile validation free and
+# possible from a Windows machine.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    name: Engine tests
+    # macos-26 went GA in Feb 2026; Xcode 26.4.1 is the default image toolchain, which is what
+    # this project's iOS 26 / Swift 6 target needs.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
+
+      # ReframeKit links no UI framework, so this exercises the schema, timeline, undo commands,
+      # binder, scene detection, beat detection, motion fitting and the Hungarian solver with no
+      # simulator involved. It is the fastest signal in the project — run it first.
+      - name: swift test
+        working-directory: Packages/ReframeKit
+        run: swift test --parallel
+
+  app:
+    name: App build (iOS)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build for device (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Reframe.xcodeproj \
+            -scheme Reframe \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | tee build.log
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build.log
+          retention-days: 7

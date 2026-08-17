@@ -1,0 +1,70 @@
+# XcodeGen fallback.
+#
+# The checked-in Reframe.xcodeproj should work as-is. If Xcode rejects it — the pbxproj was
+# authored by hand and never opened by Xcode — regenerate an equivalent project:
+#
+#   brew install xcodegen && xcodegen generate && open Reframe.xcodeproj
+#
+# This must stay in sync with Reframe.xcodeproj/project.pbxproj. The settings that matter are
+# the iOS 26 deployment target, Swift 6 complete concurrency, and the local package dependency.
+
+name: Reframe
+options:
+  bundleIdPrefix: com.reframe
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    MTL_FAST_MATH: YES
+
+packages:
+  ReframeKit:
+    path: Packages/ReframeKit
+
+targets:
+  Reframe:
+    type: application
+    platform: iOS
+    # Shaders.metal lives under Reframe/Rendering/ and is picked up here, so Xcode compiles and
+    # validates it at build time rather than us finding a typo as a black frame at runtime.
+    sources:
+      - path: Reframe
+    dependencies:
+      - package: ReframeKit
+        product: ReframeKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.reframe.app
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: 1
+        TARGETED_DEVICE_FAMILY: 1
+        SUPPORTS_MACCATALYST: NO
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Reframe
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: >-
+          Reframe reads the photos and videos you choose. Everything stays on this iPhone —
+          nothing is uploaded.
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: >-
+          Reframe saves your finished video to Photos. Nothing is uploaded.
+
+schemes:
+  Reframe:
+    build:
+      targets:
+        Reframe: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    archive:
+      config: Release
