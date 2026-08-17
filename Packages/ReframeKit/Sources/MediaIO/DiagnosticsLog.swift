@@ -21,7 +21,7 @@ public final class DiagnosticsLog: @unchecked Sendable {
         case warning
         case failure
 
-        var marker: String {
+        public var marker: String {
             switch self {
             case .info: return "·"
             case .timing: return "⏱"
