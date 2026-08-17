@@ -66,3 +66,40 @@ jobs:
           name: xcodebuild-log
           path: build.log
           retention-days: 7
+
+  ipa:
+    name: Unsigned .ipa
+    needs: app
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Archive (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project Reframe.xcodeproj \
+            -scheme Reframe \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Reframe.xcarchive \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      # Deliberately not `xcodebuild -exportArchive`, which insists on a signing identity we
+      # do not have and do not want in CI. An .ipa is just a zip with the .app inside a
+      # Payload/ directory, so build it by hand and let the sideloader sign it on the way in.
+      - name: Package .ipa
+        run: |
+          mkdir -p build/Payload
+          cp -R build/Reframe.xcarchive/Products/Applications/Reframe.app build/Payload/
+          cd build && zip -qry Reframe-unsigned.ipa Payload
+
+      - name: Upload .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: Reframe-unsigned-ipa
+          path: build/Reframe-unsigned.ipa
+          retention-days: 14
