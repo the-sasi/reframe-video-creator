@@ -56,9 +56,13 @@ public struct MediaSource: Sendable {
         guard let video = videoTracks.first else {
             throw ReframeError.noVideoTrack
         }
+        // Held as a local as well as a stored property: `audioTrack` is a computed property
+        // now, and reading one inside `init` before every stored property is assigned is
+        // illegal — it requires a fully-initialized `self`.
+        let audio = try await asset.loadTracks(withMediaType: .audio).first
+
         self.videoTrackBox = TrackBox(track: video)
-        self.audioTrackBox = (try await asset.loadTracks(withMediaType: .audio).first)
-            .map(TrackBox.init(track:))
+        self.audioTrackBox = audio.map(TrackBox.init(track:))
 
         let duration = try await asset.load(.duration).seconds
         guard duration.isFinite, duration > 0 else {
@@ -81,7 +85,7 @@ public struct MediaSource: Sendable {
             width: width,
             height: height,
             aspect: AspectPreset(width: width, height: height),
-            hasAudio: audioTrack != nil,
+            hasAudio: audio != nil,
             fingerprint: Self.fingerprint(url: url, duration: duration, width: width, height: height)
         )
     }

@@ -39,6 +39,11 @@ public struct ResolvedAsset: @unchecked Sendable {
     }
 }
 
+/// Carries a non-Sendable `AVAsset` across a continuation boundary.
+private struct AVAssetBox: @unchecked Sendable {
+    let asset: AVAsset?
+}
+
 /// Turns `AssetReference`s into pixels, on demand.
 ///
 /// Resolution can fail — the user deletes a photo from their library — and that is a normal
@@ -153,13 +158,18 @@ public actor AssetResolver {
             let options = PHVideoRequestOptions()
             options.isNetworkAccessAllowed = false
             options.deliveryMode = .highQualityFormat
-            return await withCheckedContinuation { continuation in
+            // `AVAsset` is not Sendable, so resuming a continuation with one directly is a
+            // data-race diagnostic under Swift 6. Boxing confines the unchecked claim: the
+            // asset is created by Photos, handed over once, and never touched by the callback
+            // again.
+            let box: AVAssetBox = await withCheckedContinuation { continuation in
                 PHImageManager.default().requestAVAsset(
                     forVideo: phAsset, options: options
                 ) { asset, _, _ in
-                    continuation.resume(returning: asset)
+                    continuation.resume(returning: AVAssetBox(asset: asset))
                 }
             }
+            return box.asset
         case .fileBookmark(let data):
             return withSecurityScopedURL(data) { AVURLAsset(url: $0) }
         case .sandboxRelativePath(let path):
