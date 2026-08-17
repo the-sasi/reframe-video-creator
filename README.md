@@ -23,10 +23,18 @@ It does not copy the reference. It copies the *edit*.
 | 5 | App UI: import → analyse → map → generate → edit → export | ✅ Implemented |
 | 6 | Optional generative AI (image animation, B-roll) | ⬜ Deliberately not built |
 
-**Not yet compiled.** This tree was authored on Windows; Swift/Metal cannot be built or run
-there. First build must happen on macOS with Xcode 26. See [Building](#building) and
-[`docs/07-roadmap.md`](docs/07-roadmap.md#first-build-checklist) for the expected first-build
-punch list.
+**Partially compiled.** Authored on Windows, so the Apple-framework half has never met a
+compiler. What *has* been verified, with Swift 6.3.3 on Windows:
+
+| Target | State |
+|---|---|
+| `RecipeCore` — schema, `Timeline`, 24 undoable `EditCommand`s, `RecipeBinder`, `Confident<T>` | ✅ Compiles clean (~2,400 lines) |
+| `MediaIO`, `Analysis`, `Mapping`, `Rendering`, `Intelligence` | ⬜ Need macOS — AVFoundation, Vision, Accelerate, Metal, Core Text |
+| App target — SwiftUI, `Shaders.metal` | ⬜ Needs Xcode 26 |
+
+The remaining ~80% is covered by [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which
+builds everything on a `macos-26` runner with no signing identity required. See
+[`docs/07-roadmap.md`](docs/07-roadmap.md#first-build-checklist) for the expected punch list.
 
 ---
 

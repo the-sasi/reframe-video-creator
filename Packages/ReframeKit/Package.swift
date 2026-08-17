@@ -1,4 +1,6 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
+// `.iOS(.v26)` below was introduced in PackageDescription 6.2 — declaring 6.0 here makes the
+// manifest fail to compile before SPM gets as far as looking at any source.
 import PackageDescription
 
 // The engine. Deliberately links no UI framework, so `swift test` exercises the whole
