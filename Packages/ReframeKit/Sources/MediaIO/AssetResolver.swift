@@ -5,6 +5,25 @@ import ImageIO
 import Photos
 import RecipeCore
 
+#if canImport(UIKit)
+import UIKit
+
+/// `PHImageManager` hands back the platform image type — `UIImage` on iOS, `NSImage` on macOS —
+/// and only one of them has a `cgImage` property. The engine builds for macOS so `swift test`
+/// can run without a simulator, so this has to work on both.
+extension UIImage {
+    var platformCGImage: CGImage? { cgImage }
+}
+#elseif canImport(AppKit)
+import AppKit
+
+extension NSImage {
+    var platformCGImage: CGImage? {
+        cgImage(forProposedRect: nil, context: nil, hints: nil)
+    }
+}
+#endif
+
 /// A resolved asset: the reference plus a way to actually get at pixels.
 public struct ResolvedAsset: @unchecked Sendable {
     public let reference: AssetReference
@@ -119,7 +138,7 @@ public actor AssetResolver {
                 let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
                 if isDegraded { return }
                 resumed = true
-                continuation.resume(returning: image?.cgImage)
+                continuation.resume(returning: image?.platformCGImage)
             }
         }
     }

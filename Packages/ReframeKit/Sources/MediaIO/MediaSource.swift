@@ -12,8 +12,23 @@ public struct MediaSource: Sendable {
     public let asset: AVURLAsset
     public let url: URL
     public let info: SourceInfo
-    public let videoTrack: AVAssetTrack
-    public let audioTrack: AVAssetTrack?
+
+    private let videoTrackBox: TrackBox
+    private let audioTrackBox: TrackBox?
+
+    public var videoTrack: AVAssetTrack { videoTrackBox.track }
+    public var audioTrack: AVAssetTrack? { audioTrackBox?.track }
+
+    /// `AVAssetTrack` carries no `Sendable` conformance, which would otherwise force the whole
+    /// of `MediaSource` to become `@unchecked`.
+    ///
+    /// Boxing keeps the struct's conformance *checked* and confines the unchecked claim to one
+    /// place with one justification: a track here is an immutable descriptor resolved once
+    /// during `init`, never reassigned, and only ever read through the async `load(_:)` API —
+    /// which is the access path Apple documents as usable from any thread.
+    private struct TrackBox: @unchecked Sendable {
+        let track: AVAssetTrack
+    }
 
     /// References longer than this produce unwieldy templates and slow analysis for no benefit.
     /// Not a hard failure — the caller can proceed after warning.
@@ -41,8 +56,9 @@ public struct MediaSource: Sendable {
         guard let video = videoTracks.first else {
             throw ReframeError.noVideoTrack
         }
-        self.videoTrack = video
-        self.audioTrack = try await asset.loadTracks(withMediaType: .audio).first
+        self.videoTrackBox = TrackBox(track: video)
+        self.audioTrackBox = (try await asset.loadTracks(withMediaType: .audio).first)
+            .map(TrackBox.init(track:))
 
         let duration = try await asset.load(.duration).seconds
         guard duration.isFinite, duration > 0 else {
