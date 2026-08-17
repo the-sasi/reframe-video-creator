@@ -144,6 +144,7 @@ public enum DeviceInfo {
 
     public static func summary() -> String {
         var lines: [String] = []
+        lines.append("Build:    \(buildDescription())")
         lines.append("Device:   \(modelIdentifier())")
         lines.append("OS:       \(ProcessInfo.processInfo.operatingSystemVersionString)")
         lines.append("Memory:   \(ProcessInfo.processInfo.physicalMemory / 1_048_576) MB")
@@ -151,6 +152,24 @@ public enum DeviceInfo {
         lines.append("Thermal:  \(thermalDescription())")
         lines.append("Low power: \(ProcessInfo.processInfo.isLowPowerModeEnabled ? "on" : "off")")
         return lines.joined(separator: "\n")
+    }
+
+    /// Which build is actually running.
+    ///
+    /// Every sideloaded `.ipa` carries the same bundle id and version, so without this there is
+    /// no way to tell from the device whether a fix has actually landed — and "are you on the
+    /// new build?" would become the first question of every debugging round. CI stamps the
+    /// commit SHA in, so the answer is unambiguous.
+    public static func buildDescription() -> String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        let sha = info?["ReframeGitSHA"] as? String
+
+        if let sha, !sha.isEmpty {
+            return "\(version) (\(build)) · \(String(sha.prefix(7)))"
+        }
+        return "\(version) (\(build)) · local"
     }
 
     /// e.g. `iPhone16,2`. More useful than a marketing name for narrowing down a hardware-

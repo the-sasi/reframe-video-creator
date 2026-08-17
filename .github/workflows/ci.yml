@@ -74,6 +74,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The build number and commit SHA are stamped in so the Diagnostics screen can say which
+      # build is running. Every sideloaded .ipa otherwise reports "1.0 (1)", making "are you on
+      # the new build?" unanswerable from the device.
       - name: Archive (unsigned)
         run: |
           set -o pipefail
@@ -84,6 +87,8 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath build/Reframe.xcarchive \
             -skipMacroValidation \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            INFOPLIST_KEY_ReframeGitSHA=${{ github.sha }} \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""

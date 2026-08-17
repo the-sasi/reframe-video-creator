@@ -11,8 +11,11 @@ struct SettingsView: View {
     var body: some View {
         List {
             Section {
-                LabeledContent("Version", value: ReframeKit.version)
+                LabeledContent("Build", value: DeviceInfo.buildDescription())
+                LabeledContent("Engine", value: ReframeKit.version)
                 LabeledContent("Project format", value: "v\(ReframeKit.schemaVersion)")
+            } footer: {
+                Text("The build line includes the commit it was made from — quote it when reporting a problem.")
             }
 
             Section {
