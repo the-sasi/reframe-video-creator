@@ -18,7 +18,7 @@ public struct TextAnalyzer: Sendable {
     /// One OCR hit at one moment.
     private struct Observation {
         var text: String
-        var rect: NormalizedRect
+        var rect: RecipeCore.NormalizedRect
         var confidence: Double
         var time: Double
     }
@@ -129,7 +129,7 @@ public struct TextAnalyzer: Sendable {
             let box = result.boundingBox
             return Observation(
                 text: text,
-                rect: NormalizedRect.fromVision(
+                rect: RecipeCore.NormalizedRect.fromVision(
                     x: box.origin.x, y: box.origin.y,
                     width: box.size.width, height: box.size.height
                 ),
@@ -187,7 +187,7 @@ public struct TextAnalyzer: Sendable {
     /// glyphs cover fewer pixels than the background behind them. This is a heuristic and it is
     /// reported as such — outlined or shadowed text gives it trouble, and heavy display faces
     /// on a plain background can invert the assumption.
-    private func sampleColors(in buffer: CVPixelBuffer, region: NormalizedRect) -> [ColorAnalyzer.RGB] {
+    private func sampleColors(in buffer: CVPixelBuffer, region: RecipeCore.NormalizedRect) -> [ColorAnalyzer.RGB] {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
 
@@ -271,13 +271,13 @@ public struct TextAnalyzer: Sendable {
         )
     }
 
-    private func medianRect(_ rects: [NormalizedRect]) -> NormalizedRect {
+    private func medianRect(_ rects: [RecipeCore.NormalizedRect]) -> RecipeCore.NormalizedRect {
         guard !rects.isEmpty else { return .full }
         func median(_ values: [Double]) -> Double {
             let sorted = values.sorted()
             return sorted[sorted.count / 2]
         }
-        return NormalizedRect(
+        return RecipeCore.NormalizedRect(
             x: median(rects.map(\.x)),
             y: median(rects.map(\.y)),
             width: median(rects.map(\.width)),
@@ -299,7 +299,7 @@ public struct TextAnalyzer: Sendable {
     /// - platform-UI and growth-hack phrases;
     /// - small text, parked in a corner, present for most of the video — the shape of a
     ///   watermark regardless of what it says.
-    static func isLikelyWatermark(text: String, rect: NormalizedRect, coverage: Double) -> Bool {
+    static func isLikelyWatermark(text: String, rect: RecipeCore.NormalizedRect, coverage: Double) -> Bool {
         let lowered = text.lowercased()
 
         if lowered.hasPrefix("@") { return true }

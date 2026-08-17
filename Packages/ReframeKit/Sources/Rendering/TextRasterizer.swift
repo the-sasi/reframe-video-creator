@@ -105,8 +105,8 @@ public final class TextRasterizer: @unchecked Sendable {
         let spaceWidth = Self.measure(" ", font: font).width
 
         let measured: [Measured] = draw.words.map { word in
-            let m = Self.measure(word, font: font)
-            return Measured(text: word, width: m.width, ascent: m.ascent, descent: m.descent)
+            let m = Self.measure(word.text, font: font)
+            return Measured(text: word.text, width: m.width, ascent: m.ascent, descent: m.descent)
         }
 
         var lines: [[Int]] = []

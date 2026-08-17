@@ -5,6 +5,10 @@ import MediaIO
 import RecipeCore
 import Vision
 
+// `RecipeCore.NormalizedRect` is spelled out in full throughout this file. Vision's Swift-only
+// API (iOS 18+) declares its own `NormalizedRect`, so the bare name is ambiguous in any file
+// that imports both. Qualifying is noisier than a typealias but says plainly which one is meant.
+
 /// What we know about one of the user's photos.
 ///
 /// Everything here comes from Vision requests that are already on the device — no downloaded
@@ -15,7 +19,7 @@ public struct AssetFeatures: Sendable, Hashable {
     /// Fraction of frame occupied by the salient region. Drives shot-scale matching.
     public var salientAreaFraction: Double?
     /// Where the subject is, for subject-aware cropping.
-    public var salientRect: NormalizedRect?
+    public var salientRect: RecipeCore.NormalizedRect?
     /// `VNCalculateImageAestheticsScoresRequest.overallScore`, roughly -1...1.
     public var aestheticScore: Double?
     /// Screenshots, receipts, documents. A built-in classifier we get for free, and the single
@@ -36,7 +40,7 @@ public struct AssetFeatures: Sendable, Hashable {
     public init(
         assetID: UUID,
         salientAreaFraction: Double? = nil,
-        salientRect: NormalizedRect? = nil,
+        salientRect: RecipeCore.NormalizedRect? = nil,
         aestheticScore: Double? = nil,
         isUtility: Bool = false,
         orientation: AssetOrientation = .portrait,
@@ -156,13 +160,13 @@ public struct AssetFeatureExtractor: Sendable {
         // meaningfully cheaper than three separate performs.
         try? handler.perform([saliencyRequest, aestheticsRequest, featurePrintRequest])
 
-        var salientRect: NormalizedRect?
+        var salientRect: RecipeCore.NormalizedRect?
         if let observation = saliencyRequest.results?.first as? VNSaliencyImageObservation,
            let objects = observation.salientObjects, !objects.isEmpty {
-            var union: NormalizedRect?
+            var union: RecipeCore.NormalizedRect?
             for object in objects {
                 let box = object.boundingBox
-                let rect = NormalizedRect.fromVision(
+                let rect = RecipeCore.NormalizedRect.fromVision(
                     x: box.origin.x, y: box.origin.y,
                     width: box.size.width, height: box.size.height
                 )

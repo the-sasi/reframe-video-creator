@@ -239,10 +239,10 @@ public struct ShotAnalyzer: Sendable {
 
             // Union rather than sum: overlapping salient boxes would otherwise total more than
             // the frame and report every shot as a close-up.
-            var union: NormalizedRect?
+            var union: RecipeCore.NormalizedRect?
             for object in objects {
                 let box = object.boundingBox
-                let rect = NormalizedRect.fromVision(
+                let rect = RecipeCore.NormalizedRect.fromVision(
                     x: box.origin.x, y: box.origin.y,
                     width: box.size.width, height: box.size.height
                 )
