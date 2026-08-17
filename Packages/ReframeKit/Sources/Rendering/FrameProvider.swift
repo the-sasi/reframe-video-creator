@@ -19,12 +19,22 @@ public protocol FrameProvider: Sendable {
 // MARK: - Shared texture loading
 
 /// CGImage -> MTLTexture with a bounded cache. Shared by both providers.
-public actor TextureLoader {
+///
+/// A lock-guarded class rather than an actor, deliberately. `MTLTexture` has no `Sendable`
+/// conformance, so an actor could never hand one back to a caller in another isolation domain —
+/// which is the only thing this type exists to do. A mutex has no isolation domain to cross,
+/// and Metal objects are safe to use from multiple threads once created.
+///
+/// Same reasoning as `MetalRenderer` and `TexturePool`, which are built this way for the same
+/// reason. The `@unchecked` claim covers exactly one thing: `cache` and `order`, both of which
+/// are only ever touched under `lock`.
+public final class TextureLoader: @unchecked Sendable {
     private let device: MTLDevice
     private let loader: MTKTextureLoader
     private var cache: [UUID: MTLTexture] = [:]
     private var order: [UUID] = []
     private let limit: Int
+    private let lock = NSLock()
 
     public init(device: MTLDevice, limit: Int = 12) {
         self.device = device
@@ -33,10 +43,14 @@ public actor TextureLoader {
     }
 
     public func texture(for id: UUID) -> MTLTexture? {
-        cache[id]
+        lock.lock()
+        defer { lock.unlock() }
+        return cache[id]
     }
 
     public func store(_ texture: MTLTexture, for id: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
         cache[id] = texture
         order.removeAll { $0 == id }
         order.append(id)
@@ -46,6 +60,9 @@ public actor TextureLoader {
     }
 
     public func make(from image: CGImage) -> MTLTexture? {
+        // MTKTextureLoader is documented as safe to use concurrently, so this stays outside
+        // the lock — texture creation is the slow part and serialising it would throttle
+        // export for no safety benefit.
         try? loader.newTexture(
             cgImage: image,
             options: [
@@ -57,6 +74,8 @@ public actor TextureLoader {
     }
 
     public func evictAll() {
+        lock.lock()
+        defer { lock.unlock() }
         cache.removeAll()
         order.removeAll()
     }
@@ -86,7 +105,7 @@ public actor PreviewFrameProvider: FrameProvider {
     public func resources(for plan: RenderPlan) async -> RenderResources {
         var textures: [UUID: MTLTexture] = [:]
         for id in Self.assetIDs(in: plan) {
-            if let cached = await loader.texture(for: id) {
+            if let cached = loader.texture(for: id) {
                 textures[id] = cached
             } else {
                 // Not loaded yet: kick off the load and render this frame without it. The next
@@ -106,7 +125,7 @@ public actor PreviewFrameProvider: FrameProvider {
         // The condition lives in the body rather than a `where` clause: `where` is an
         // autoclosure, and autoclosures cannot be async.
         for id in ids {
-            if await loader.texture(for: id) == nil {
+            if loader.texture(for: id) == nil {
                 await load(id: id)
             }
         }
@@ -133,8 +152,8 @@ public actor PreviewFrameProvider: FrameProvider {
         }
         guard let image else { return }
 
-        if let texture = await loader.make(from: image) {
-            await loader.store(texture, for: id)
+        if let texture = loader.make(from: image) {
+            loader.store(texture, for: id)
         }
     }
 
@@ -146,7 +165,7 @@ public actor PreviewFrameProvider: FrameProvider {
     }
 
     public func evictAll() async {
-        await loader.evictAll()
+        loader.evictAll()
     }
 
     private static func firstFrame(of asset: AVAsset?, maxDimension: Int) async -> CGImage? {
@@ -245,12 +264,12 @@ public actor ExportFrameProvider: FrameProvider {
                 if let texture = await videoTexture(for: reference, at: sourceTime) {
                     textures[id] = texture
                 }
-            } else if let cached = await loader.texture(for: id) {
+            } else if let cached = loader.texture(for: id) {
                 textures[id] = cached
             } else if let resolved = await resolver.resolve(reference, maxDimension: canvasDimension),
                       let image = resolved.image,
-                      let texture = await loader.make(from: image) {
-                await loader.store(texture, for: id)
+                      let texture = loader.make(from: image) {
+                loader.store(texture, for: id)
                 textures[id] = texture
             }
         }
@@ -267,7 +286,7 @@ public actor ExportFrameProvider: FrameProvider {
             )
         }
         guard let image = await videoReaders[reference.id]?.frame(at: time) else { return nil }
-        return await loader.make(from: image)
+        return loader.make(from: image)
     }
 
     public func finish() {
@@ -288,7 +307,12 @@ public actor ExportFrameProvider: FrameProvider {
 ///
 /// Sequential reading rather than repeated seeking: seeking to every frame of a clip costs
 /// roughly an order of magnitude more than decoding through it, and produces the same pixels.
-actor SequentialVideoReader {
+///
+/// A class rather than an actor: `AVAssetImageGenerator` is not `Sendable`, so awaiting
+/// `generator.image(at:)` from inside an actor counts as sending it across a boundary. The
+/// `@unchecked` claim is narrow — `ExportFrameProvider` is an actor and is the only owner, and
+/// it awaits each frame in order, so calls here are already serialised.
+final class SequentialVideoReader: @unchecked Sendable {
     private let generator: AVAssetImageGenerator
     private var lastTime: Double = -1
     private var lastImage: CGImage?
