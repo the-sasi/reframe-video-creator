@@ -210,6 +210,9 @@ final class AppModel {
     // MARK: - Errors
 
     func present(_ error: ReframeError) {
+        // Recorded even when silent: a cancellation that the user never sees is still the
+        // reason a later step did nothing, and that is exactly the gap a diagnostic log fills.
+        DiagnosticsLog.shared.failure("app", "\(error.presentation.title) — \(error.logDetail)")
         guard !error.presentation.isSilent else { return }
         PerformanceLog.warn(error.logDetail)
         Haptics.warning()

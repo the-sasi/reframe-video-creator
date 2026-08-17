@@ -40,8 +40,15 @@ public enum PerformanceLog {
         defer {
             signposter.endInterval(stage, state)
             let elapsed = ContinuousClock.now - start
+            let seconds = Double(elapsed.components.seconds)
+                + Double(elapsed.components.attoseconds) / 1e18
             logger.debug(
-                "\(String(describing: stage), privacy: .public) took \(elapsed.formatted(), privacy: .public), footprint \(memoryFootprintMB(), format: .fixed(precision: 1)) MB"
+                "\(String(describing: stage), privacy: .public) took \(seconds, format: .fixed(precision: 2))s, footprint \(memoryFootprintMB(), format: .fixed(precision: 1)) MB"
+            )
+            // Every measured stage lands in the exportable report too, so a user with no
+            // debugger can still tell us where the time went.
+            DiagnosticsLog.shared.timing(
+                "perf", String(describing: stage), seconds: seconds
             )
         }
         return try await body()
@@ -69,9 +76,11 @@ public enum PerformanceLog {
 
     public static func warn(_ message: String) {
         logger.warning("\(message, privacy: .public)")
+        DiagnosticsLog.shared.warning("engine", message)
     }
 
     public static func error(_ message: String) {
         logger.error("\(message, privacy: .public)")
+        DiagnosticsLog.shared.failure("engine", message)
     }
 }

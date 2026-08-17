@@ -68,6 +68,18 @@ struct SettingsView: View {
             }
 
             Section {
+                NavigationLink {
+                    DiagnosticsView()
+                } label: {
+                    Label("Diagnostics", systemImage: "stethoscope")
+                }
+            } header: {
+                Text("Troubleshooting")
+            } footer: {
+                Text("If something goes wrong, open this and tap Export Log. It records what ran and where it stopped — no photos, no personal content.")
+            }
+
+            Section {
                 LabeledContent("Free space", value: storageUsed)
                 Button("Clear preview caches", role: .destructive) {
                     model.handleMemoryPressure()

@@ -122,10 +122,18 @@ public actor AnalysisPipeline {
     public func analyze(url: URL, title: String? = nil) async throws -> EditRecipe {
         defer { continuation?.finish() }
 
+        DiagnosticsLog.shared.info("analysis", "=== analysing \(url.lastPathComponent) ===")
+
         // 1. Read
         update(.readVideo, .running(fraction: nil))
         let source = try await MediaSource(url: url)
         update(.readVideo, .done(summary: summarise(source)))
+        DiagnosticsLog.shared.info(
+            "analysis",
+            "source \(source.info.width)x\(source.info.height) @\(Int(source.info.fps))fps, "
+                + String(format: "%.1fs", source.info.duration)
+                + ", audio=\(source.info.hasAudio)"
+        )
 
         // 2. Scenes
         update(.detectScenes, .running(fraction: 0))
@@ -228,6 +236,19 @@ public actor AnalysisPipeline {
         guard let index = progress.stages.firstIndex(where: { $0.stage == stage }) else { return }
         progress.stages[index].status = status
         continuation?.yield(progress)
+
+        // Record transitions only, not the per-frame `.running(fraction:)` churn — a log that
+        // is 99% progress ticks buries the one line that matters.
+        switch status {
+        case .done(let summary):
+            DiagnosticsLog.shared.info("analysis", "\(stage.rawValue) done — \(summary)")
+        case .failed:
+            DiagnosticsLog.shared.failure("analysis", "\(stage.rawValue) FAILED")
+        case .running(let fraction) where fraction == nil || fraction == 0:
+            DiagnosticsLog.shared.info("analysis", "\(stage.rawValue) started")
+        default:
+            break
+        }
     }
 
     private func summarise(_ source: MediaSource) -> String {

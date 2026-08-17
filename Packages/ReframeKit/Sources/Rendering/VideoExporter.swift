@@ -263,6 +263,14 @@ public actor VideoExporter {
             )
         }
 
+        let attributes = try? FileManager.default.attributesOfItem(atPath: request.outputURL.path)
+        let bytes = (attributes?[.size] as? Int64) ?? 0
+        DiagnosticsLog.shared.info(
+            "export",
+            "wrote \(totalFrames) frames at \(settings.width)x\(settings.height)@\(settings.fps), "
+                + "\(bytes / 1_000_000) MB, thermal=\(DeviceInfo.thermalDescription())"
+        )
+
         progress(ExportProgress(phase: .done, fraction: 1, framesWritten: totalFrames, totalFrames: totalFrames))
         return request.outputURL
     }

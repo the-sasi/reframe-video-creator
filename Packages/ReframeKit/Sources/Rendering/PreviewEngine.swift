@@ -198,6 +198,11 @@ public final class PreviewEngine: NSObject {
                 failure = .renderSetupFailed(detail: error.localizedDescription)
             }
             await MainActor.run {
+                // Log the transition only. A broken preview fails identically 30 times a
+                // second, and an unfiltered log would be nothing but that one line.
+                if let failure, self.lastError != failure {
+                    DiagnosticsLog.shared.failure("preview", failure.logDetail)
+                }
                 self.lastError = failure
                 self.isRendering = false
             }
