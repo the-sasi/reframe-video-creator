@@ -103,24 +103,35 @@ unrepresentable.
 
 ## Status
 
-Authored on Windows, so the Apple-framework half has never met a compiler. Verified so far with
-Swift 6.3.3:
+**Everything compiles and all tests pass** on `macos-26` with Xcode 26 — engine, SwiftUI app and
+Metal shaders — and CI publishes an installable unsigned `.ipa` on every push.
 
-| Component | Lines | State |
-|---|---|---|
-| `RecipeCore` — schema, timeline, 24 undoable commands, binder | ~2,400 | ✅ **Compiles clean** |
-| `MediaIO` — frame streaming, audio decode, project store | ~1,300 | ⬜ Needs macOS (AVFoundation) |
-| `Analysis` — scene, motion, text, colour, audio | ~3,200 | ⬜ Needs macOS (Vision, Accelerate) |
-| `Mapping` — features, cost matrix, Hungarian solver | ~800 | ⬜ Needs macOS (Vision) |
-| `Rendering` — Metal graph, text rasteriser, exporter | ~2,400 | ⬜ Needs macOS (Metal, Core Text) |
-| App — SwiftUI screens, timeline, `Shaders.metal` | ~2,400 | ⬜ Needs Xcode 26 |
+```
+✓ Engine tests      31 tests, 11 suites, 0 failures
+✓ App build (iOS)   unsigned, no certificate required
+✓ Unsigned .ipa     artifact, ready to sideload
+```
 
-CI covers the rest: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) builds everything on a
-`macos-26` runner, unsigned, so no certificate is required.
+What has **not** happened: nobody has run it on a device. Every performance target in
+[`docs/08-quality.md`](docs/08-quality.md) is still unmeasured, and no reference video has been
+through the pipeline end to end. Compiling is not working.
 
-Two real bugs have already been caught this way — a `swift-tools-version` too low for
-`.iOS(.v26)`, and a `resources:` declaration pointing at a directory that doesn't exist. Both
-would have failed identically on a Mac.
+### Bugs CI caught that review had not
+
+The project was authored on Windows with no compiler available, so the first green build took
+several rounds. Worth recording what that actually found:
+
+| Bug | Why it mattered |
+|---|---|
+| **23 ms lag on every beat** | STFT frame `k` spans `[k·hop, k·hop+1024)`, so its energy centres half a window after its start. Using the start understated *every* onset — a constant lag on the whole beat grid, and on every beat-synced cut |
+| **Beat grid drift** | Beats advanced by an ideal period from a fixed origin, so deviations accumulated and the grid slid out of phase. Now re-anchors to each peak found |
+| **Tempo quantisation** | Integer autocorrelation lags are ~4 BPM apart near 140 BPM, so the estimator *could not* be accurate. Fixed with parabolic peak interpolation |
+| `NormalizedRect` ambiguity | Vision's Swift API declares its own, colliding with ours in every file importing both |
+| `swift-tools-version` too low | `.iOS(.v26)` needs 6.2; the manifest failed before reading a single source file |
+| Non-Sendable actor boundaries | `MTLTexture` and `AVAssetTrack` cannot cross one — `TextureLoader` had to stop being an actor |
+
+The first three are algorithm bugs a compiler cannot find; they came from the test suite on its
+first run.
 
 ## Getting started
 
