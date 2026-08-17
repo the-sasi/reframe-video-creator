@@ -120,9 +120,18 @@ public actor PreviewFrameProvider: FrameProvider {
         // Resolution is by id, so the pool must be reachable from the resolver's cache. The
         // caller seeds it via `register(_:)`.
         guard let reference = registry[id] else { return }
-        guard let resolved = await resolver.resolve(reference, maxDimension: maxDimension),
-              let image = resolved.image ?? (await Self.firstFrame(of: resolved.asset, maxDimension: maxDimension))
+        guard let resolved = await resolver.resolve(reference, maxDimension: maxDimension)
         else { return }
+
+        // Spelled out rather than `resolved.image ?? (await ...)`: the right-hand side of `??`
+        // is an autoclosure, and autoclosures cannot be async.
+        let image: CGImage?
+        if let still = resolved.image {
+            image = still
+        } else {
+            image = await Self.firstFrame(of: resolved.asset, maxDimension: maxDimension)
+        }
+        guard let image else { return }
 
         if let texture = await loader.make(from: image) {
             await loader.store(texture, for: id)
