@@ -87,6 +87,11 @@ enum Theme {
 
 /// Sparingly used. Haptic inflation is worse than silence — if everything buzzes, the buzz on
 /// the thing that matters carries no information.
+///
+/// `@MainActor` because UIKit's feedback generators have main-actor-isolated initialisers, so
+/// the static properties below cannot be created from a nonisolated context. Every caller is
+/// already on the main actor.
+@MainActor
 enum Haptics {
     #if canImport(UIKit)
     private static let selection = UISelectionFeedbackGenerator()

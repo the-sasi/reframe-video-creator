@@ -48,9 +48,16 @@ let package = Package(
             dependencies: ["RecipeCore", "MediaIO", "Analysis", "Mapping", "Rendering", "Intelligence"]
         ),
 
+        // Depends on each module directly, not just the umbrella. `@testable import ReframeKit`
+        // only grants internal access to ReframeKit itself — re-exported modules keep their
+        // own access control, so the tests could not reach `AudioAnalyzer.estimateTempo` and
+        // friends without naming those modules here.
         .testTarget(
             name: "ReframeKitTests",
-            dependencies: ["ReframeKit"]
+            dependencies: [
+                "ReframeKit", "RecipeCore", "MediaIO",
+                "Analysis", "Mapping", "Rendering", "Intelligence",
+            ]
         ),
     ]
 )

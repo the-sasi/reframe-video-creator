@@ -1,6 +1,15 @@
 import Foundation
 import Testing
+
+// Each module is imported `@testable` individually. `@testable import ReframeKit` alone only
+// opens up the umbrella target; the re-exported modules keep their own access control, so
+// internal members like `AudioAnalyzer.estimateTempo` would stay invisible.
+@testable import Analysis
+@testable import Mapping
+@testable import MediaIO
+@testable import RecipeCore
 @testable import ReframeKit
+@testable import Rendering
 
 // The engine has no UI dependency, so all of this runs under `swift test` on a Mac — no
 // simulator, no device, no checked-in video fixtures. Synthetic input is the point: a clip
