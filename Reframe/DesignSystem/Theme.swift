@@ -135,14 +135,17 @@ enum Haptics {
 
 // MARK: - Modifiers
 
+// `nonisolated` because these get called from `@ViewBuilder` closures that are not themselves
+// main-actor isolated — a `PhotosPicker` label, for instance. Neither touches main-actor state;
+// they compose a view from Sendable tokens.
 extension View {
     /// Enforces the 44pt minimum by construction rather than by vigilance.
-    func minimumHitTarget() -> some View {
+    nonisolated func minimumHitTarget() -> some View {
         frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
     }
 
-    func cardSurface() -> some View {
+    nonisolated func cardSurface() -> some View {
         background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
     }
 }

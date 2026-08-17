@@ -208,20 +208,26 @@ public struct AudioAnalyzer: Sendable {
             return (120, 0.1, "envelope too short for tempo estimation")
         }
 
+        // Precompute the normalised autocorrelation once per lag. Recomputing it for the
+        // confidence pass, as an earlier version did, roughly doubled the cost for nothing.
+        var correlations = [Double](repeating: 0, count: maxLag + 1)
+        for lag in minLag...maxLag {
+            var sum = 0.0
+            let count = onset.count - lag
+            guard count > 0 else { continue }
+            for i in 0..<count {
+                sum += Double(onset[i]) * Double(onset[i + lag])
+            }
+            correlations[lag] = sum / Double(count)
+        }
+
         var bestLag = minLag
         var bestScore = -Double.infinity
         var rawBestLag = minLag
         var rawBestScore = -Double.infinity
 
         for lag in minLag...maxLag {
-            var correlation = 0.0
-            var count = 0
-            for i in 0..<(onset.count - lag) {
-                correlation += Double(onset[i]) * Double(onset[i + lag])
-                count += 1
-            }
-            guard count > 0 else { continue }
-            let normalized = correlation / Double(count)
+            let normalized = correlations[lag]
 
             if normalized > rawBestScore {
                 rawBestScore = normalized
@@ -241,17 +247,33 @@ public struct AudioAnalyzer: Sendable {
             }
         }
 
-        let bpm = 60.0 * rate / Double(bestLag)
+        // Parabolic interpolation around the peak, for sub-frame lag resolution.
+        //
+        // Integer lags quantise the tempo badly at the fast end: the envelope runs at ~43 Hz,
+        // so near 140 BPM two adjacent lags are about 4 BPM apart and no integer lag can land
+        // within 2 BPM of the truth. Fitting a parabola through the peak and its two
+        // neighbours recovers the true maximum to a fraction of a frame.
+        var refinedLag = Double(bestLag)
+        if bestLag > minLag, bestLag < maxLag {
+            let before = correlations[bestLag - 1]
+            let peak = correlations[bestLag]
+            let after = correlations[bestLag + 1]
+            let denominator = before - 2 * peak + after
+            if abs(denominator) > 1e-12 {
+                let offset = 0.5 * (before - after) / denominator
+                // A well-formed peak puts the vertex within half a sample either side;
+                // anything beyond that means the fit is not describing a peak at all.
+                refinedLag += min(max(offset, -0.5), 0.5)
+            }
+        }
+
+        let bpm = 60.0 * rate / refinedLag
 
         // Confidence: how much the chosen peak stands out from the mean correlation.
         var meanCorrelation = 0.0
         var samples = 0
         for lag in Swift.stride(from: minLag, through: maxLag, by: max(1, (maxLag - minLag) / 40)) {
-            var correlation = 0.0
-            for i in 0..<(onset.count - lag) {
-                correlation += Double(onset[i]) * Double(onset[i + lag])
-            }
-            meanCorrelation += correlation / Double(onset.count - lag)
+            meanCorrelation += correlations[lag]
             samples += 1
         }
         meanCorrelation /= Double(max(1, samples))
@@ -319,7 +341,13 @@ public struct AudioAnalyzer: Sendable {
 
             let time = Double(peakIndex) / rate
             if time <= duration { beats.append(time) }
-            position += period
+
+            // Re-anchor to the peak actually found rather than advancing from the original
+            // offset. Stepping by an ideal period from a fixed origin lets small per-beat
+            // deviations accumulate, so the grid slides progressively out of phase across a
+            // track — and real performances are never exactly metronomic, so the drift is
+            // guaranteed rather than hypothetical.
+            position = Double(peakIndex) + period
         }
         return beats
     }

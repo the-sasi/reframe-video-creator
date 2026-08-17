@@ -166,7 +166,15 @@ struct SceneDetectionTests {
             } else if index > dissolveEnd {
                 thumb = imageB
             } else {
-                let alpha = Float(index - dissolveStart) / Float(dissolveEnd - dissolveStart)
+                // Ramp relative to the *pure* frames either side of the run, not to the run's
+                // own ends. In real footage the frame before a dissolve is pure A and the frame
+                // after is pure B, with every frame between them a blend — so alpha at the
+                // first blended frame is one step in, never zero. Anchoring to the run's own
+                // ends produced flat shoulders that no real cross-fade has, and the detector
+                // was right to reject it.
+                let rampStart = dissolveStart - 1
+                let rampEnd = dissolveEnd + 1
+                let alpha = Float(index - rampStart) / Float(rampEnd - rampStart)
                 thumb = zip(imageA, imageB).map { $0 * (1 - alpha) + $1 * alpha }
                 contentValue = 0.03  // elevated, but below the cut threshold
             }
