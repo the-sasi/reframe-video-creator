@@ -18,6 +18,7 @@ struct ContentImportView: View {
     @State private var logoItem: PhotosPickerItem?
     @State private var isLoading = false
     @State private var isPreparing = false
+    @State private var isImportingMusic = false
     @State private var authorization: PHAuthorizationStatus = .notDetermined
     @State private var lastImportNote: String?
 
@@ -282,23 +283,141 @@ struct ContentImportView: View {
                 .cardSurface()
             }
 
-            if model.recipe?.audio.hasMusic == true {
+            musicRow
+
+            if model.recipe?.audio.hasMusic == true, model.content.musicAssetID == nil {
                 HStack(alignment: .top, spacing: Theme.Space.m) {
-                    Image(systemName: "music.note")
-                        .foregroundStyle(Theme.Palette.secondaryText)
+                    Image(systemName: "waveform")
+                        .foregroundStyle(Theme.Palette.accent)
                         .frame(width: 24)
-                    Text("The reference is cut to music. Add your own track in the editor and the cuts will line up — Reframe never uses the reference's audio.")
+                    Text("The reference is cut to music at \(Int(model.recipe?.beatGrid?.bpm.value.rounded() ?? 0)) BPM. Add your own track and the cuts will land on its beat — Reframe never uses the reference's audio.")
                         .font(Theme.Font.caption)
                         .foregroundStyle(Theme.Palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(Theme.Space.m)
                 .background(
-                    Theme.Palette.surface.opacity(0.6),
+                    Theme.Palette.accentSoft,
                     in: RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
                 )
             }
         }
+        .fileImporter(
+            isPresented: $isImportingMusic,
+            allowedContentTypes: [.audio, .mp3, .wav, .mpeg4Audio, .aiff]
+        ) { result in
+            guard case .success(let url) = result else { return }
+            Task { await importMusic(from: url) }
+        }
+    }
+
+    private var musicRow: some View {
+        Group {
+            if let id = model.content.musicAssetID, let track = model.assets[id] {
+                HStack(spacing: Theme.Space.m) {
+                    Image(systemName: "music.note")
+                        .foregroundStyle(Theme.Palette.accent)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(track.displayName)
+                            .font(Theme.Font.body)
+                            .foregroundStyle(Theme.Palette.primaryText)
+                            .lineLimit(1)
+                        Text(String(format: "%.0f seconds", track.duration))
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(Theme.Palette.secondaryText)
+                    }
+                    Spacer()
+                    Button {
+                        model.content.musicAssetID = nil
+                        model.assets.remove(id: id)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(Theme.Palette.tertiaryText)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(Theme.Space.m)
+                .cardSurface()
+            } else {
+                Button {
+                    isImportingMusic = true
+                } label: {
+                    HStack(spacing: Theme.Space.m) {
+                        Image(systemName: "music.note")
+                            .foregroundStyle(Theme.Palette.accent)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Add music")
+                                .font(Theme.Font.body)
+                                .foregroundStyle(Theme.Palette.primaryText)
+                            Text("From Files — an MP3, M4A or WAV you own")
+                                .font(Theme.Font.caption)
+                                .foregroundStyle(Theme.Palette.secondaryText)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.tertiaryText)
+                    }
+                    .padding(Theme.Space.m)
+                    .cardSurface()
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    /// Copies the chosen track into the sandbox.
+    ///
+    /// Copying rather than referencing, for two reasons: the security-scoped URL from Files
+    /// expires, and preview playback needs a stable local path. Music files are small enough
+    /// that the copy is not worth avoiding, unlike photos.
+    private func importMusic(from url: URL) async {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let relative = "ImportedMedia/audio-\(UUID().uuidString).\(url.pathExtension)"
+        let destination = documents.appendingPathComponent(relative)
+        try? FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try? FileManager.default.removeItem(at: destination)
+
+        guard (try? FileManager.default.copyItem(at: url, to: destination)) != nil else {
+            DiagnosticsLog.shared.failure("content", "could not copy audio \(url.lastPathComponent)")
+            lastImportNote = "Couldn't read that audio file."
+            return
+        }
+
+        let asset = AVURLAsset(url: destination)
+        let duration = (try? await asset.load(.duration).seconds) ?? 0
+
+        // DRM-protected tracks (anything from Apple Music) copy fine but have no readable
+        // audio track, so catch that here rather than at export time.
+        let hasAudio = ((try? await asset.loadTracks(withMediaType: .audio)) ?? []).isEmpty == false
+        guard duration > 0, hasAudio else {
+            try? FileManager.default.removeItem(at: destination)
+            DiagnosticsLog.shared.warning("content", "audio unreadable or DRM-protected: \(url.lastPathComponent)")
+            lastImportNote = "That track is protected and can't be used. Apple Music downloads won't work — try a file you own."
+            return
+        }
+
+        let reference = AssetReference(
+            kind: .audio,
+            origin: .sandboxRelativePath(relative),
+            displayName: url.deletingPathExtension().lastPathComponent,
+            pixelWidth: 0,
+            pixelHeight: 0,
+            duration: duration
+        )
+        model.assets.add(reference)
+        model.content.musicAssetID = reference.id
+        lastImportNote = nil
+        DiagnosticsLog.shared.info(
+            "content", "music added: \(reference.displayName), \(String(format: "%.1fs", duration))"
+        )
     }
 
     // MARK: - Import

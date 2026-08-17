@@ -15,6 +15,7 @@ struct EditorView: View {
     @State private var activeTool: Tool = .edit
     @State private var currentTime: Double = 0
     @State private var undoToast: String?
+    @State private var showsAudioSheet = false
 
     enum Tool: String, CaseIterable, Identifiable {
         case edit, text, audio, style, export
@@ -105,6 +106,13 @@ struct EditorView: View {
         }
         .onChange(of: document.revision) { _, _ in
             engine.timeline = document.timeline
+            // The pool may have gained a track since the engine was built; without this the
+            // preview stays silent after adding music.
+            engine.currentAssetPool = model.assets
+            engine.updateAssets(model.assets)
+        }
+        .sheet(isPresented: $showsAudioSheet) {
+            AudioSheet(document: document)
         }
     }
 
@@ -150,9 +158,12 @@ struct EditorView: View {
         HStack(spacing: 0) {
             ForEach(Tool.allCases) { tool in
                 Button {
-                    if tool == .export {
+                    switch tool {
+                    case .export:
                         model.path.append(.export)
-                    } else {
+                    case .audio:
+                        showsAudioSheet = true
+                    default:
                         withAnimation(Theme.Motion.quick) { activeTool = tool }
                     }
                 } label: {
