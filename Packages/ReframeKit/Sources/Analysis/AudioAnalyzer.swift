@@ -26,6 +26,23 @@ public struct AudioAnalyzer: Sendable {
     /// 22 050 / 512 = 43.07 onset-envelope samples per second.
     private static var envelopeRate: Double { AudioDecoder.analysisSampleRate / Double(hopSize) }
 
+    /// Wall-clock time of STFT frame `index`.
+    ///
+    /// Frame `k` covers samples `[k·hop, k·hop + fftSize)`, so its energy is centred half a
+    /// window after its start. Treating the start as the frame's time understates every onset
+    /// by `fftSize / 2 / sampleRate` — 23 ms here — which is a constant lag on the entire beat
+    /// grid, and therefore on every beat-synced cut the app makes. Fractional indices are
+    /// accepted so sub-frame refinement survives the conversion.
+    static func frameTime(_ index: Double) -> Double {
+        (index * Double(hopSize) + Double(fftSize) / 2) / AudioDecoder.analysisSampleRate
+    }
+
+    /// Inverse of `frameTime(_:)`.
+    static func frameIndex(atTime time: Double) -> Int {
+        let index = (time * AudioDecoder.analysisSampleRate - Double(fftSize) / 2) / Double(hopSize)
+        return max(0, Int(index.rounded()))
+    }
+
     private static let minBPM = 60.0
     private static let maxBPM = 200.0
 
@@ -339,15 +356,31 @@ public struct AudioAnalyzer: Sendable {
                 peakIndex = i
             }
 
-            let time = Double(peakIndex) / rate
+            // Sub-frame peak refinement, same parabola as the tempo estimator. The envelope
+            // only has ~23 ms resolution, so without this a beat can never be placed closer
+            // than half a frame to the truth — and the integer truncation would compound into
+            // real drift once fed back into `position`.
+            var refined = Double(peakIndex)
+            if peakIndex > 0, peakIndex < onset.count - 1 {
+                let before = Double(onset[peakIndex - 1])
+                let peak = Double(onset[peakIndex])
+                let after = Double(onset[peakIndex + 1])
+                let denominator = before - 2 * peak + after
+                if abs(denominator) > 1e-12 {
+                    refined += min(max(0.5 * (before - after) / denominator, -0.5), 0.5)
+                }
+            }
+
+            let time = Self.frameTime(refined)
             if time <= duration { beats.append(time) }
 
             // Re-anchor to the peak actually found rather than advancing from the original
             // offset. Stepping by an ideal period from a fixed origin lets small per-beat
             // deviations accumulate, so the grid slides progressively out of phase across a
             // track — and real performances are never exactly metronomic, so the drift is
-            // guaranteed rather than hypothetical.
-            position = Double(peakIndex) + period
+            // guaranteed rather than hypothetical. Carrying the fractional part keeps the
+            // re-anchoring from reintroducing that drift through truncation.
+            position = refined + period
         }
         return beats
     }
@@ -357,7 +390,6 @@ public struct AudioAnalyzer: Sendable {
     /// is why this is offered as a hint rather than a claim.
     func estimateDownbeats(beats: [Double], onset: [Float]) -> [Double] {
         guard beats.count >= 4 else { return beats }
-        let rate = Self.envelopeRate
 
         var bestPhase = 0
         var bestEnergy = -Float.infinity
@@ -365,7 +397,7 @@ public struct AudioAnalyzer: Sendable {
             var energy: Float = 0
             var index = phase
             while index < beats.count {
-                let frame = Int(beats[index] * rate)
+                let frame = Self.frameIndex(atTime: beats[index])
                 if frame < onset.count { energy += onset[frame] }
                 index += 4
             }
