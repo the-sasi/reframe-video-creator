@@ -103,8 +103,12 @@ public actor PreviewFrameProvider: FrameProvider {
         let ids = timeline.clips
             .filter { $0.start >= time - 0.5 && $0.start <= time + lookahead }
             .compactMap(\.assetID)
-        for id in ids where await loader.texture(for: id) == nil {
-            await load(id: id)
+        // The condition lives in the body rather than a `where` clause: `where` is an
+        // autoclosure, and autoclosures cannot be async.
+        for id in ids {
+            if await loader.texture(for: id) == nil {
+                await load(id: id)
+            }
         }
     }
 

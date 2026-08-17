@@ -24,9 +24,15 @@ public enum PerformanceLog {
     }
 
     /// Times a stage and records its peak footprint.
+    ///
+    /// The `isolation:` parameter defaulting to `#isolation` makes this inherit whatever
+    /// isolation the caller has. Without it, `AnalysisPipeline` (an actor) passing a closure
+    /// that captures its own state counts as sending a non-Sendable closure across a boundary,
+    /// which Swift 6 rejects.
     @discardableResult
     public static func measure<T>(
         _ stage: StaticString,
+        isolation: isolated (any Actor)? = #isolation,
         _ body: () async throws -> T
     ) async rethrows -> T {
         let state = signposter.beginInterval(stage)
