@@ -618,6 +618,10 @@ struct CommandTests {
             .setOverlayFrame(id: overlay.id, frame: tight, wasFrame: overlay.frame),
             .setCanvas(canvas: .square1080, wasCanvas: .reel1080),
             .setBackground(hex: "#101010", wasHex: timeline.backgroundHex),
+            .batch(name: "Two things", commands: [
+                .setClipVolume(id: clipID, volume: 0.3, wasVolume: clip.volume),
+                .setBackground(hex: "#202020", wasHex: timeline.backgroundHex),
+            ]),
         ]
     }
 
@@ -631,7 +635,8 @@ struct CommandTests {
         // update is a list that stops being true.
         for command in samples {
             switch command {
-            case .trimClip, .splitClip, .deleteClip, .insertClip, .moveClip,
+            case .batch,
+                 .trimClip, .splitClip, .deleteClip, .insertClip, .moveClip,
                  .replaceClipAsset, .setClipSpeed, .setClipCrop, .setClipGrade,
                  .setClipEffects, .setClipVolume, .setClipFit, .setTransition,
                  .addTextLayer, .deleteTextLayer, .setTextContent, .setTextFrame,

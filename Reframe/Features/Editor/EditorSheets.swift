@@ -522,3 +522,65 @@ struct SaveTemplateSheet: View {
         .onAppear { title = model.recipe?.title ?? "" }
     }
 }
+
+// MARK: - Variations
+
+/// Three (four) alternative treatments of the same structure and assets. Each is one undoable
+/// step; "As bound" re-runs the binder from the recipe.
+struct VariationsSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let document: TimelineDocument
+
+    var body: some View {
+        SheetScaffold(title: "Variations", detents: [.medium, .large]) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    Text("Same cuts, same photos, a different treatment. Every one is a single undo step, so try them all.")
+                        .font(Theme.Font.callout)
+                        .foregroundStyle(Theme.Palette.secondaryText)
+                        .padding(.bottom, Theme.Space.xs)
+
+                    if model.recipe != nil {
+                        ChoiceCard(
+                            title: "Closest to the reference",
+                            detail: "Re-binds from the reference's style with your current photos and words. Discards manual edits to motion, transitions and colour.",
+                            systemImage: "scope",
+                            isSelected: false
+                        ) {
+                            model.bindTimeline()
+                            Haptics.success()
+                            dismiss()
+                        }
+                    }
+                    ForEach(EditVariation.allCases) { variation in
+                        ChoiceCard(
+                            title: variation.displayName,
+                            detail: variation.summary,
+                            systemImage: icon(for: variation),
+                            isSelected: false
+                        ) {
+                            guard let command = variation.command(for: document.timeline) else {
+                                Haptics.warning()
+                                return
+                            }
+                            document.perform(command)
+                            Haptics.success()
+                            dismiss()
+                        }
+                    }
+                }
+                .padding(Theme.Space.m)
+            }
+        }
+    }
+
+    private func icon(for variation: EditVariation) -> String {
+        switch variation {
+        case .alternateTransitions: return "arrow.left.arrow.right"
+        case .cinematic: return "film"
+        case .punchy: return "bolt.fill"
+        case .minimal: return "minus"
+        }
+    }
+}

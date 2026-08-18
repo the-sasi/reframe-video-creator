@@ -330,6 +330,38 @@ section("TextLayer.displayWords honours line breaks and caps") {
     check(words == ["HELLO", "WORLD", TextLayer.lineBreakMarker, "SECOND", "LINE"], "words: \(words)")
 }
 
+section("Variations: batched, undoable, idempotent") {
+    let recipe = sampleRecipe(sceneCount: 6)
+    let (pool, refs) = samplePool(count: 6)
+    var assignment = AssetAssignment()
+    for (i, scene) in recipe.scenes.enumerated() { assignment[scene.slot.id] = refs[i].id }
+    let bound = RecipeBinder().bind(recipe: recipe, assets: pool, assignment: assignment, content: UserContent())
+    for variation in EditVariation.allCases {
+        var timeline = bound
+        guard let command = variation.command(for: timeline) else { check(false, "\(variation.rawValue) produced a command"); continue }
+        if case .batch(let name, let commands) = command {
+            check(name == variation.displayName && !commands.isEmpty, "\(variation.rawValue) is a named batch of \(commands.count)")
+        } else { check(false, "\(variation.rawValue) is a batch") }
+        try command.apply(to: &timeline)
+        check(timeline != bound, "\(variation.rawValue) changed the document")
+        check(timeline.clips.map(\.duration) == bound.clips.map(\.duration), "\(variation.rawValue) kept every duration")
+        check(timeline.clips.map(\.assetID) == bound.clips.map(\.assetID), "\(variation.rawValue) kept every asset")
+        // Idempotent: applying again is a no-op.
+        check(variation.command(for: timeline) == nil, "\(variation.rawValue) is idempotent")
+        try command.revert(from: &timeline)
+        check(timeline == bound, "\(variation.rawValue) reverts exactly")
+    }
+    // Cinematic ends on a fade to black and has film grain everywhere.
+    var cine = bound
+    try EditVariation.cinematic.command(for: cine)!.apply(to: &cine)
+    check(cine.clips.last?.transitionIn?.kind == .fadeToBlack, "cinematic fades out")
+    check(cine.clips.allSatisfy { $0.grain > 0 }, "cinematic grain")
+    // Batch survives JSON (persisted history).
+    let data = try RecipeSchema.encoder.encode(EditVariation.punchy.command(for: bound)!)
+    let decoded = try RecipeSchema.decoder.decode(EditCommand.self, from: data)
+    check(decoded == EditVariation.punchy.command(for: bound)!, "batch command round-trips JSON")
+}
+
 section("Starter templates bind cleanly") {
     check(StarterTemplates.all.count >= 8, "have starters (\(StarterTemplates.all.count))")
     for recipe in StarterTemplates.all {

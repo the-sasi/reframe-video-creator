@@ -400,10 +400,11 @@ final class PreviewVideoPlayer: @unchecked Sendable {
         // Everything else on them is documented thread-safe, so build on main and use from the
         // provider's actor. The box carries the non-Sendable objects across once.
         let assetBox = AVAssetBox(asset: asset)
-        let attributes = VideoGeometry.pixelBufferAttributes(width: width, height: height)
         let built: PlayerBox = await MainActor.run {
             let item = AVPlayerItem(asset: assetBox.asset)
-            let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attributes)
+            let output = AVPlayerItemVideoOutput(
+                pixelBufferAttributes: VideoGeometry.pixelBufferAttributes(width: width, height: height)
+            )
             item.add(output)
             let player = AVPlayer(playerItem: item)
             player.isMuted = true

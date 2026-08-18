@@ -49,7 +49,7 @@ final class ThumbnailCache {
     }
 
     private static func load(_ asset: AssetReference, size: CGSize) async -> UIImage? {
-        let scale = UIScreen.main.scale
+        let scale = UITraitCollection.current.displayScale > 0 ? UITraitCollection.current.displayScale : 3
         let pixels = CGSize(width: size.width * scale, height: size.height * scale)
         switch asset.origin {
         case .photoLibrary(let identifier):

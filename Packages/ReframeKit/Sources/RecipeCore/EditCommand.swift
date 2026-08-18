@@ -7,7 +7,11 @@ import Foundation
 /// project and survive a force-quit), exhaustiveness is compiler-checked, and each case carries
 /// **both the new and the previous value**, which makes `revert` trivially correct instead of
 /// something that has to be kept in sync with `apply`.
-public enum EditCommand: Codable, Sendable, Hashable {
+public indirect enum EditCommand: Codable, Sendable, Hashable {
+
+    /// Several commands as one undo step — "Apply Cinematic", "Reset all colour". Applied in
+    /// order, reverted in reverse. Never coalesces.
+    case batch(name: String, commands: [EditCommand])
 
     // MARK: Clips
     case trimClip(id: UUID, duration: Double, sourceStart: Double,
@@ -61,6 +65,7 @@ public enum EditCommand: Codable, Sendable, Hashable {
     /// Shown in the undo affordance: "Undo Trim Clip".
     public var name: String {
         switch self {
+        case .batch(let name, _): return name
         case .trimClip: return "Trim Clip"
         case .splitClip: return "Split Clip"
         case .deleteClip: return "Delete Clip"
@@ -123,6 +128,8 @@ public enum EditCommand: Codable, Sendable, Hashable {
         switch self {
         case .trimClip, .splitClip, .deleteClip, .insertClip, .moveClip, .setClipSpeed:
             return true
+        case .batch(_, let commands):
+            return commands.contains { $0.affectsLayout }
         default:
             return false
         }
@@ -290,6 +297,16 @@ extension EditCommand {
 
     private func mutate(_ t: inout Timeline, reverting: Bool) throws {
         switch self {
+
+        case .batch(_, let commands):
+            // Reverting walks backwards so each child sees the state its own apply left behind.
+            for command in reverting ? commands.reversed() : commands {
+                if reverting {
+                    try command.revert(from: &t)
+                } else {
+                    try command.apply(to: &t)
+                }
+            }
 
         case .trimClip(let id, let duration, let sourceStart, let wasDuration, let wasSourceStart):
             let i = try clipIndex(id, in: t)

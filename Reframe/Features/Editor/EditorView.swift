@@ -25,7 +25,7 @@ struct EditorView: View {
     @State private var confirmDelete = false
 
     enum EditorSheet: Identifiable {
-        case text, audio, style, transition, speed, replace, canvas, captions, saveTemplate
+        case text, audio, style, transition, speed, replace, canvas, captions, saveTemplate, variations
         var id: Int { hashValue }
     }
 
@@ -150,6 +150,8 @@ struct EditorView: View {
                 CaptionsSheet(document: document)
             case .saveTemplate:
                 SaveTemplateSheet()
+            case .variations:
+                VariationsSheet(document: document)
             }
         }
         .confirmationDialog("Delete this?", isPresented: $confirmDelete, titleVisibility: .hidden) {
@@ -200,6 +202,7 @@ struct EditorView: View {
         ToolButton(title: "Captions", systemImage: "captions.bubble") { sheet = .captions }
         ToolButton(title: "Canvas", systemImage: "aspectratio") { sheet = .canvas }
         ToolButton(title: "Look", systemImage: "camera.filters") { sheet = .style }
+        ToolButton(title: "Variations", systemImage: "wand.and.sparkles") { sheet = .variations }
         ToolButton(title: "Save style", systemImage: "square.and.arrow.down.on.square", isEnabled: model.recipe != nil) { sheet = .saveTemplate }
     }
 
