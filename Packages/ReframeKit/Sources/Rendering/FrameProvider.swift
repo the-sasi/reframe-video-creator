@@ -396,22 +396,27 @@ final class PreviewVideoPlayer: @unchecked Sendable {
         self.sourceTransform = await VideoGeometry.sourceTransform(for: track)
         self.textures = textures
 
-        let item = AVPlayerItem(asset: asset)
-        let output = AVPlayerItemVideoOutput(
-            pixelBufferAttributes: VideoGeometry.pixelBufferAttributes(width: width, height: height)
-        )
-        item.add(output)
-        self.item = item
-        self.output = output
-
-        let player = AVPlayer(playerItem: item)
-        player.isMuted = true
-        player.actionAtItemEnd = .pause
-        player.automaticallyWaitsToMinimizeStalling = false
-        // Preview audio is mixed separately from the same plan; this player must never make
-        // a sound of its own or the mix would be double-counted.
-        player.volume = 0
-        self.player = player
+        // `AVPlayerItem.init` and `AVPlayer.init` are main-actor-isolated in the iOS 26 SDK.
+        // Everything else on them is documented thread-safe, so build on main and use from the
+        // provider's actor. The box carries the non-Sendable objects across once.
+        let assetBox = AVAssetBox(asset: asset)
+        let attributes = VideoGeometry.pixelBufferAttributes(width: width, height: height)
+        let built: PlayerBox = await MainActor.run {
+            let item = AVPlayerItem(asset: assetBox.asset)
+            let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attributes)
+            item.add(output)
+            let player = AVPlayer(playerItem: item)
+            player.isMuted = true
+            player.actionAtItemEnd = .pause
+            player.automaticallyWaitsToMinimizeStalling = false
+            // Preview audio is mixed separately from the same plan; this player must never
+            // make a sound of its own or the mix would be double-counted.
+            player.volume = 0
+            return PlayerBox(player: player, item: item, output: output)
+        }
+        self.item = built.item
+        self.output = built.output
+        self.player = built.player
         self.isReady = true
     }
 
@@ -565,6 +570,17 @@ public actor ExportFrameProvider: FrameProvider {
         loader.evictAll()
         pixelTextures.flush()
     }
+}
+
+/// Carries a non-Sendable `AVAsset` into a main-actor hop, and the player objects back out.
+private struct AVAssetBox: @unchecked Sendable {
+    let asset: AVAsset
+}
+
+private struct PlayerBox: @unchecked Sendable {
+    let player: AVPlayer
+    let item: AVPlayerItem
+    let output: AVPlayerItemVideoOutput
 }
 
 /// Walks a video track forward through `AVAssetReader`, holding one decoded frame.

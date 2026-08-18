@@ -330,6 +330,30 @@ section("TextLayer.displayWords honours line breaks and caps") {
     check(words == ["HELLO", "WORLD", TextLayer.lineBreakMarker, "SECOND", "LINE"], "words: \(words)")
 }
 
+section("Starter templates bind cleanly") {
+    check(StarterTemplates.all.count >= 8, "have starters (\(StarterTemplates.all.count))")
+    for recipe in StarterTemplates.all {
+        check(recipe.isBuiltIn == true && !(recipe.tags ?? []).isEmpty, "\(recipe.title) tagged built-in")
+        check(abs(recipe.duration - recipe.scenes.last!.end) < 1e-6, "\(recipe.title) duration matches scenes")
+        let (pool, refs) = samplePool(count: 4)
+        var assignment = AssetAssignment()
+        for (i, scene) in recipe.scenes.enumerated() { assignment[scene.slot.id] = refs[i % refs.count].id }
+        var content = UserContent()
+        for slot in recipe.textSlots { content.textBySlot[slot.id] = "hello" }
+        let timeline = RecipeBinder().bind(recipe: recipe, assets: pool, assignment: assignment, content: content)
+        check(timeline.clips.count == recipe.scenes.count, "\(recipe.title) binds all scenes")
+        check(timeline.textLayers.count == recipe.textSlots.count, "\(recipe.title) binds all text")
+        check(abs(timeline.duration - recipe.duration) < 0.05, "\(recipe.title) duration preserved (\(timeline.duration) vs \(recipe.duration))")
+        // Deterministic: same recipe twice.
+        let again = RecipeBinder().bind(recipe: recipe, assets: pool, assignment: assignment, content: content)
+        check(again == timeline, "\(recipe.title) deterministic bind")
+        // Round-trips through JSON.
+        let data = try RecipeSchema.encoder.encode(recipe)
+        let decoded = try RecipeSchema.decodeRecipe(data)
+        check(decoded == recipe, "\(recipe.title) codable round trip")
+    }
+}
+
 print("")
 print(failures == 0 ? "ALL \(passes) CHECKS PASSED" : "\(failures) FAILED, \(passes) passed")
 exit(failures == 0 ? 0 : 1)

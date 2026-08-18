@@ -174,11 +174,14 @@ public actor AnalysisPipeline {
         // at 720 px on a stride while motion seeks per shot; neither contends with the other
         // for the GPU the way two optical-flow passes would.
         update(.readText, .running(fraction: 0))
-        let textTask = Task.detached(priority: .userInitiated) { [textAnalyzer, weak self] in
+        // A strong capture of the actor: `weak self` inside a nested `@Sendable` closure is a
+        // captured `var`, which Swift 6 refuses. The pipeline outlives its own `analyze` call
+        // regardless, so the strong reference costs nothing.
+        let pipeline = self
+        let textTask = Task.detached(priority: .userInitiated) { [textAnalyzer] in
             try await PerformanceLog.measure("readText") {
                 try await textAnalyzer.analyze(source: source) { done, total in
-                    guard let self else { return }
-                    Task { await self.update(.readText, .running(fraction: Double(done) / Double(max(1, total)))) }
+                    Task { await pipeline.update(.readText, .running(fraction: Double(done) / Double(max(1, total)))) }
                 }
             }
         }

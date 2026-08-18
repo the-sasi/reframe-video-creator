@@ -39,8 +39,9 @@ let package = Package(
         // not exist makes SPM refuse to load the manifest at all.
         .target(name: "Rendering", dependencies: ["RecipeCore", "MediaIO"]),
 
-        // Optional, absent-tolerant. Heuristic implementation is the default.
-        .target(name: "Intelligence", dependencies: ["RecipeCore"]),
+        // Optional, absent-tolerant. Heuristic implementation is the default. MediaIO only for
+        // the diagnostics log; the module still has no way to reach Analysis or Rendering.
+        .target(name: "Intelligence", dependencies: ["RecipeCore", "MediaIO"]),
 
         // Umbrella re-export so the app imports one module.
         .target(
