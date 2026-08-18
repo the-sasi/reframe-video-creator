@@ -50,7 +50,7 @@ struct TextOverlayEditor: View {
                             Circle()
                                 .fill(Theme.Palette.accent)
                                 .frame(width: 18, height: 18)
-                                .overlay { Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 9, weight: .bold)).foregroundStyle(.white) }
+                                .overlay { Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.Palette.onAccent) }
                                 .offset(x: 9, y: 9)
                                 .gesture(resizeGesture(for: overlay))
                         }
@@ -89,7 +89,7 @@ struct TextOverlayEditor: View {
                         if isSelected {
                             Text(layer.text)
                                 .font(.system(size: 9, weight: .medium, design: .rounded))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(Theme.Palette.onAccent)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
                                 .background(Theme.Palette.accent, in: Capsule())

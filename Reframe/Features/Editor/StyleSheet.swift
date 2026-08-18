@@ -299,7 +299,7 @@ struct StyleSheet: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: 50)
-            .foregroundStyle(isActive ? .white : Theme.Palette.primaryText)
+            .foregroundStyle(isActive ? Theme.Palette.onAccent : Theme.Palette.primaryText)
             .background(
                 isActive ? Theme.Palette.accent : Theme.Palette.surfaceRaised,
                 in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous)

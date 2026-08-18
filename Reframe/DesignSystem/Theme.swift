@@ -15,9 +15,15 @@ enum Theme {
     // MARK: - Colour
 
     enum Palette {
-        static let accent = Color(red: 0.94, green: 0.45, blue: 0.55)
-        static let accentDeep = Color(red: 0.72, green: 0.26, blue: 0.48)
-        static let accentSoft = Color(red: 0.94, green: 0.45, blue: 0.55).opacity(0.14)
+        /// Amber. Warm and cinematic on the dark chrome, unmistakable as "the thing to tap",
+        /// and it reads as a video tool rather than a lifestyle app. The original rose was
+        /// chosen to match a bouquet-shop sample reel, which is not a reason.
+        static let accent = Color(red: 0.961, green: 0.722, blue: 0.302)   // #F5B84D
+        static let accentDeep = Color(red: 0.788, green: 0.490, blue: 0.071) // #C97D12
+        static let accentSoft = Color(red: 0.961, green: 0.722, blue: 0.302).opacity(0.16)
+        /// Text and glyphs *on* the accent. Gold is light; white on it fails contrast, so
+        /// anything sitting on an accent fill uses this near-black instead.
+        static let onAccent = Color(red: 0.12, green: 0.08, blue: 0.02)
 
         /// The one gradient in the app. Used for the primary action and nothing else, so it
         /// keeps meaning "this is the thing to tap".
@@ -50,8 +56,9 @@ enum Theme {
         static let warning = Color(.systemOrange)
         static let danger = Color(.systemRed)
 
-        /// Inference, not fact. Quiet on purpose — findable, not alarming.
-        static let guessed = Color(.systemOrange).opacity(0.9)
+        /// Inference, not fact. Quiet on purpose — findable, not alarming. Cool, so it never
+        /// reads as the (warm) accent.
+        static let guessed = Color(.systemIndigo).opacity(0.9)
 
         /// Hairline that reads on both light and dark without needing two definitions.
         static let hairline = Color.primary.opacity(0.08)

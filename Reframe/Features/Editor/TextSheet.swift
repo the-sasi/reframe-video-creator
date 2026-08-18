@@ -83,11 +83,11 @@ struct TextSheet: View {
                                 .lineLimit(1)
                             Text("\(layer.role.displayName) · \(String(format: "%.1f–%.1fs", layer.start, layer.end))")
                                 .font(.system(size: 10))
-                                .foregroundStyle(isActive ? .white.opacity(0.85) : Theme.Palette.secondaryText)
+                                .foregroundStyle(isActive ? Theme.Palette.onAccent.opacity(0.75) : Theme.Palette.secondaryText)
                         }
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .frame(maxWidth: 180, alignment: .leading)
-                        .foregroundStyle(isActive ? .white : Theme.Palette.primaryText)
+                        .foregroundStyle(isActive ? Theme.Palette.onAccent : Theme.Palette.primaryText)
                         .background(isActive ? AnyShapeStyle(Theme.Palette.accent) : AnyShapeStyle(Theme.Palette.surfaceRaised),
                                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
@@ -257,7 +257,7 @@ struct TextSheet: View {
                                 .minimumScaleFactor(0.7)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 40)
-                                .foregroundStyle(isActive ? .white : Theme.Palette.primaryText)
+                                .foregroundStyle(isActive ? Theme.Palette.onAccent : Theme.Palette.primaryText)
                                 .background(isActive ? AnyShapeStyle(Theme.Palette.accent) : AnyShapeStyle(Theme.Palette.surfaceRaised),
                                             in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }

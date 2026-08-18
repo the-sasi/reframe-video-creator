@@ -50,7 +50,7 @@ struct TransitionSheet: View {
                             }
                             .frame(maxWidth: .infinity)
                             .frame(height: 62)
-                            .foregroundStyle(current.kind == kind ? .white : Theme.Palette.primaryText)
+                            .foregroundStyle(current.kind == kind ? Theme.Palette.onAccent : Theme.Palette.primaryText)
                             .background(current.kind == kind ? AnyShapeStyle(Theme.Palette.accent) : AnyShapeStyle(Theme.Palette.surfaceRaised),
                                         in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
@@ -306,7 +306,7 @@ struct CanvasSheet: View {
                             } label: {
                                 VStack(spacing: 6) {
                                     RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                        .strokeBorder(isActive ? .white : Theme.Palette.secondaryText, lineWidth: 2)
+                                        .strokeBorder(isActive ? Theme.Palette.onAccent : Theme.Palette.secondaryText, lineWidth: 2)
                                         .frame(width: 30 * CGFloat(min(1, Double(option.size.0) / Double(option.size.1))),
                                                height: 30 * CGFloat(min(1, Double(option.size.1) / Double(option.size.0))))
                                         .frame(height: 32)
@@ -315,7 +315,7 @@ struct CanvasSheet: View {
                                 }
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 10)
-                                .foregroundStyle(isActive ? .white : Theme.Palette.primaryText)
+                                .foregroundStyle(isActive ? Theme.Palette.onAccent : Theme.Palette.primaryText)
                                 .background(isActive ? AnyShapeStyle(Theme.Palette.accent) : AnyShapeStyle(Theme.Palette.surfaceRaised),
                                             in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                             }

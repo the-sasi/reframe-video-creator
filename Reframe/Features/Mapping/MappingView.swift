@@ -195,7 +195,7 @@ private struct MappingRow: View {
                     HStack(spacing: Theme.Space.xs) {
                         Text("\(scene.index + 1)")
                             .font(.system(.caption2, design: .rounded, weight: .bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Theme.Palette.onAccent)
                             .frame(width: 18, height: 18)
                             .background(Theme.Palette.accent.opacity(0.85), in: Circle())
 

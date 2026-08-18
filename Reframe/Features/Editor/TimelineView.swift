@@ -929,7 +929,7 @@ final class TimelineContentView: UIView {
     static func color(for role: AudioRole) -> UIColor {
         switch role {
         case .music: return .systemGreen
-        case .voice: return .systemOrange
+        case .voice: return .systemPink
         case .effect: return .systemTeal
         case .reference: return .systemPurple
         case .clipAudio: return .systemGray

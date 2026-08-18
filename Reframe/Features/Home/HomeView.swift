@@ -99,7 +99,7 @@ struct HomeView: View {
                 HStack(alignment: .top) {
                     Image(systemName: "wand.and.stars")
                         .font(.system(size: 24, weight: .medium))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.Palette.onAccent)
                         .frame(width: 58, height: 58)
                         .background(Theme.Palette.accentGradient, in: Circle())
                         .shadow(color: Theme.Palette.accent.opacity(0.4), radius: 12, y: 5)
@@ -423,7 +423,7 @@ struct TemplateCard: View {
                     if recipe.isBuiltIn != true {
                         Text("YOURS")
                             .font(.system(size: 8, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Theme.Palette.onAccent)
                             .padding(.horizontal, 6).padding(.vertical, 3)
                             .background(Theme.Palette.accent, in: Capsule())
                             .padding(6)

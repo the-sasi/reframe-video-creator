@@ -18,7 +18,7 @@ struct PrimaryButton: View {
         } label: {
             HStack(spacing: Theme.Space.s) {
                 if isBusy {
-                    ProgressView().tint(.white)
+                    ProgressView().tint(Theme.Palette.onAccent)
                 } else if let systemImage {
                     Image(systemName: systemImage)
                         .font(.system(size: 15, weight: .semibold))
@@ -28,7 +28,7 @@ struct PrimaryButton: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: 56)
-            .foregroundStyle(.white)
+            .foregroundStyle(Theme.Palette.onAccent)
             .background {
                 RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
                     .fill(Theme.Palette.accentGradient)

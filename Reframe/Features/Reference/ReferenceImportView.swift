@@ -244,7 +244,7 @@ private struct HelpStep: View {
         HStack(alignment: .top, spacing: Theme.Space.m) {
             Text("\(number)")
                 .font(.system(.subheadline, design: .rounded, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.Palette.onAccent)
                 .frame(width: 26, height: 26)
                 .background(Theme.Palette.accent, in: Circle())
             VStack(alignment: .leading, spacing: 3) {

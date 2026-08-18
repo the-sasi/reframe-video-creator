@@ -53,7 +53,7 @@ struct Chip: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .foregroundStyle(isSelected ? Color.white : Theme.Palette.primaryText)
+            .foregroundStyle(isSelected ? Theme.Palette.onAccent : Theme.Palette.primaryText)
             .background(
                 isSelected ? AnyShapeStyle(tint) : AnyShapeStyle(Theme.Palette.surfaceRaised),
                 in: Capsule()
@@ -111,7 +111,7 @@ struct ChoiceCard: View {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 Image(systemName: systemImage)
                     .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(isSelected ? .white : Theme.Palette.accent)
+                    .foregroundStyle(isSelected ? Theme.Palette.onAccent : Theme.Palette.accent)
                     .frame(width: 40, height: 40)
                     .background(
                         isSelected ? AnyShapeStyle(Theme.Palette.accentGradient) : AnyShapeStyle(Theme.Palette.accentSoft),
