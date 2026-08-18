@@ -57,9 +57,20 @@ This is the strongest structural guarantee in the codebase, so it is worth stati
 ```
 
 Both drivers call the *same two functions*. They differ only in the `FrameProvider` supplying
-source pixels — `PreviewFrameProvider` serves cached proxy-resolution textures and tolerates a
-miss by reusing the last good frame; `ExportFrameProvider` decodes at full resolution
-sequentially and blocks until exact. Neither knows anything about layout, timing or effects.
+source pixels — `PreviewFrameProvider` serves cached proxy-resolution stills and pulls video
+frames from a muted `AVPlayer` per clip (so footage genuinely plays and scrubs), tolerating a
+miss by reusing the last good frame; `ExportFrameProvider` decodes stills at canvas resolution
+within a byte budget and walks video tracks sequentially through `AVAssetReader`. Both wrap
+decoded `CVPixelBuffer`s as Metal textures with no copy and hand the renderer a per-asset
+orientation transform, so a portrait iPhone clip is rotated in the vertex shader rather than
+in an extra pass. Neither knows anything about layout, timing or effects.
+
+The same principle governs sound. `AudioMixPlanner` is a pure function of `(Timeline,
+AssetPool)` producing per-track gain envelopes — fades, per-clip volume, muting, ducking under
+voice, clip speed. `AudioMixBuilder` turns that plan into one `AVMutableComposition` +
+`AVAudioMix`; the preview plays it through an `AVPlayer` (which becomes the master clock) and
+the exporter reads it back through `AVAssetReaderAudioMixOutput`. What you hear is what gets
+written, for the same reason what you see is.
 
 The alternative — `AVPlayer` + `videoComposition` for preview and `AVAssetExportSession` for
 export — is two pipelines with two sets of bugs. The standard advice in that world is to inject a
@@ -134,28 +145,33 @@ Swift 6 strict concurrency, project-wide.
 
 ```
 Documents/
-├── Reframe.store                      SwiftData: project index, titles, dates, thumb paths
 ├── Recipes/
-│   └── <recipe-uuid>.editrecipe.json  reusable across projects
+│   └── <recipe-uuid>.editrecipe.json  reusable across projects; exportable as .reframestyle
+├── ImportedMedia/                     music, voiceovers, extracted reference audio, and
+│                                      Photos items that had to be copied (Limited access)
 └── Projects/
     └── <project-uuid>.reframeproj/
-        ├── project.json               Timeline + settings + recipe reference
-        ├── assets.json                bookmarks + fingerprints, NOT copies
-        ├── thumbnails/
-        └── proxies/                   720p transcodes, regenerable, evictable
+        ├── project.json               Timeline + assets (references) + content + assignment
+        │                              + persisted AssetFeatures + fidelity + export settings
+        ├── history.json               undo/redo stacks — undo survives a force-quit
+        └── thumbnails/poster.png      rendered by the same planner/renderer as the video
 ```
 
 Rules, in priority order:
 
 1. **Never copy the user's originals.** Assets are referenced by `PHAsset.localIdentifier` or a
-   security-scoped bookmark. A 20-photo project costs kilobytes.
+   security-scoped bookmark. A 20-photo project costs kilobytes. The exceptions are things the
+   app *made* (voiceovers, extracted audio) or was *forced* to copy (a picked item with no
+   identifier), which land in `ImportedMedia/`.
 2. **Documents are JSON, versioned, and human-readable.** `schemaVersion` on every root object,
-   with a migration hook. Debugging a bad recipe means opening a file, not attaching a debugger.
-3. **The SwiftData store holds only what a list view needs** — id, title, dates, counts,
-   thumbnail path. It is an index, not a document store. If it were lost, every project would
-   still be recoverable by scanning `Projects/`.
-4. **`proxies/` and `thumbnails/` are caches**, marked with `.isExcludedFromBackup` and
-   evictable under storage pressure. Losing them costs time, never data.
+   and every field added after v1 decodes with a default, so a project saved by an earlier build
+   opens in a later one. Debugging a bad recipe means opening a file, not attaching a debugger.
+3. **There is no separate index.** The home screen is built by scanning `Projects/`; at tens of
+   projects that is instant, and there is nothing to fall out of sync.
+4. **`thumbnails/` is a cache**, marked with `.isExcludedFromBackup`. Losing it costs time,
+   never data.
+5. **Autosave** writes about 1.5 s after the last edit and immediately when the app backgrounds;
+   a project open at an unclean exit is offered for recovery on the next launch.
 
 Assets can go missing — the user deletes a photo. `AssetReference.resolve()` returns a
 `ResolvedAsset?` and the timeline renders a labelled placeholder for `nil` rather than crashing

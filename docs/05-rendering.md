@@ -103,12 +103,28 @@ protocol FrameProvider: Sendable {
 
 | | `PreviewFrameProvider` | `ExportFrameProvider` |
 |---|---|---|
-| Resolution | Proxy, ≤ drawable size | Full canvas |
-| Video decode | `AVAssetImageGenerator`, async, cached | `AVAssetReader`, sequential, exact |
-| Cache miss | Reuse last good frame — never stall the display link | Block; correctness wins |
-| Memory | Bounded LRU | One frame in flight |
+| Stills | ≤1080 px, byte-budgeted cache (~96 MB) | Canvas resolution, byte-budgeted cache (~120 MB) |
+| Video decode | Muted `AVPlayer` + `AVPlayerItemVideoOutput` per asset (rolls while playing, seeks while scrubbing; rate inferred from the timeline's source-time slope) | `AVAssetReader` walked forward; restarts only when time goes backwards |
+| Pixel buffers → textures | `CVMetalTextureCache`, zero copy | `CVMetalTextureCache`, zero copy |
+| Orientation | `preferredTransform` → `SourceUVTransform`, applied in the vertex shader | same |
+| Cache miss | Reuse last good frame — never stall the display link | Hold last frame; correctness wins |
 
 The renderer cannot tell them apart, which is the point.
+
+### Audio
+
+`AudioMixPlanner` (pure, in `RecipeCore`) → `AudioMixBuilder` (AVFoundation) →
+`AVMutableComposition` + `AVMutableAudioMix`. Preview: an `AVPlayer` over that composition,
+which becomes the master clock while playing. Export: `AVAssetReaderAudioMixOutput` over the
+same composition, appended straight to the writer. Ducking, fades, per-clip volume and speed
+are all volume ramps and `scaleTimeRange` decided once in the planner.
+
+### Text
+
+Rasterised per word by Core Text with the chosen face, weight, italic, tracking, outline and
+shadow, plus one rounded box per line for background pills; layout is cached by
+`(words, style, canvas)` so animation costs no re-rasterisation. Rotation is about the block
+centre in pixel-proportional space so a tilted caption on a 9:16 canvas is not sheared.
 
 ---
 
@@ -120,12 +136,12 @@ run ahead and balloon memory.
 
 | Setting | Default | Notes |
 |---|---|---|
-| Resolution | 1080×1920 | 720×1280 and 2160×3840 offered; 4K gated on `AVAssetExportSession`-reported capability |
-| FPS | 30 | 24 / 60 available; 60 warns on long timelines |
-| Codec | HEVC when supported, else H.264 | HEVC is ~40% smaller at equal quality; H.264 for maximum shareability |
-| Bitrate | ~12 Mbps @ 1080p30 | Quality-first, tuned by a target-bitrate table |
+| Resolution | canvas aspect at 1080p short side | 720p and 4K offered for every aspect (`ExportSettings.matching`); 4K is never hidden, it warns |
+| FPS | canvas fps (30) | 24 / 60 available; 60 warns on long timelines |
+| Codec | HEVC | H.264 for maximum shareability |
+| Bitrate | ~12 Mbps @ 1080p30 High | Standard ×0.65, High ×1.0, Maximum ×1.6 |
 | Colour | BT.709 SDR | HDR passthrough is explicitly out of scope in v1 |
-| Audio | AAC 44.1 kHz stereo 128 kbps | Only when the user supplies audio |
+| Audio | AAC 44.1 kHz stereo 128 kbps | Mixed from every audible track: music, voice, reference audio, clip sound |
 | Watermark | **None** | §26 |
 
 Export is resumable-safe rather than resumable: on failure the partial file is deleted and the

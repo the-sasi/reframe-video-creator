@@ -316,7 +316,7 @@ final class TimelineScrollView: UIView, UIScrollViewDelegate, UIGestureRecognize
 
     // MARK: - Gestures
 
-    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         let point = gestureRecognizer.location(in: contentView)
         if gestureRecognizer === trimPan {
             // Only vertical-ish or edge/handle starts. Horizontal pans over empty track scroll.
