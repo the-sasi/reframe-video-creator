@@ -397,6 +397,8 @@ struct SeededGenerator: RandomNumberGenerator {
 @Suite("Edit commands")
 struct CommandTests {
 
+    /// Populated with one of every layer type, so the delete commands are actually exercised
+    /// rather than skipped for having nothing to delete.
     private func timeline() -> Timeline {
         var timeline = Timeline(canvas: .reel1080)
         timeline.clips = (0..<4).map { index in
@@ -405,6 +407,19 @@ struct CommandTests {
                 start: Double(index), duration: 1.0
             )
         }
+        timeline.textLayers = [
+            TextLayer(
+                text: "Existing", role: .caption, start: 0, end: 2,
+                frame: NormalizedRect(x: 0.1, y: 0.7, width: 0.8, height: 0.1)
+            )
+        ]
+        timeline.overlays = [
+            OverlayLayer(
+                assetID: UUID(), start: 0, end: 2,
+                frame: NormalizedRect(x: 0.4, y: 0.85, width: 0.2, height: 0.06)
+            )
+        ]
+        timeline.audio = [AudioClip(assetID: UUID(), start: 0, duration: 4)]
         timeline.relayout()
         return timeline
     }
@@ -417,14 +432,15 @@ struct CommandTests {
     private func sampleCommands(for timeline: Timeline) -> [EditCommand] {
         let clipID = timeline.clips[1].id
         let clip = timeline.clips[1]
-        let textLayer = TextLayer(
+        // Use the entities the timeline actually contains, so deletes and edits target
+        // something real. Fabricating them here is what made the first version pass a
+        // `wasVolume` of 0 against clips whose volume was 1.
+        let textLayer = timeline.textLayers[0]
+        let audioClip = timeline.audio[0]
+        let overlay = timeline.overlays[0]
+        let newTextLayer = TextLayer(
             text: "Blush Rose Elegance", role: .title, start: 0, end: 3,
             frame: NormalizedRect(x: 0.1, y: 0.15, width: 0.8, height: 0.12)
-        )
-        let audioClip = AudioClip(assetID: UUID(), start: 0, duration: 3)
-        let overlay = OverlayLayer(
-            assetID: UUID(), start: 0, end: 3,
-            frame: NormalizedRect(x: 0.3, y: 0.8, width: 0.3, height: 0.08)
         )
         let tight = NormalizedRect.full.scaled(by: 0.8)
 
@@ -442,17 +458,24 @@ struct CommandTests {
                 grade: ColorGrade(exposure: 0.2, contrast: 1.1, saturation: 1.2, temperature: 0),
                 wasGrade: .neutral
             ),
-            .setClipEffects(id: clipID, vignette: 0.4, grain: 0.3, wasVignette: 0, wasGrain: 0),
-            .setClipVolume(id: clipID, volume: 0.5, wasVolume: 0),
+            .setClipEffects(
+                id: clipID, vignette: 0.4, grain: 0.3,
+                wasVignette: clip.vignette, wasGrain: clip.grain
+            ),
+            .setClipVolume(id: clipID, volume: 0.5, wasVolume: clip.volume),
             .setTransition(
                 clipID: clipID,
-                transition: Transition(kind: .dissolve, duration: 0.3), wasTransition: nil
+                transition: Transition(kind: .dissolve, duration: 0.3),
+                wasTransition: clip.transitionIn
             ),
-            .addTextLayer(layer: textLayer),
+            .addTextLayer(layer: newTextLayer),
             .deleteTextLayer(index: 0, layer: textLayer),
             .setTextContent(id: textLayer.id, text: "New", wasText: textLayer.text),
             .setTextFrame(id: textLayer.id, frame: tight, wasFrame: textLayer.frame),
-            .setTextTiming(id: textLayer.id, start: 1, end: 4, wasStart: 0, wasEnd: 3),
+            .setTextTiming(
+                id: textLayer.id, start: 1, end: 4,
+                wasStart: textLayer.start, wasEnd: textLayer.end
+            ),
             .setTextStyle(
                 id: textLayer.id,
                 style: TextLayerStyle(
@@ -461,10 +484,15 @@ struct CommandTests {
                 ),
                 wasStyle: TextLayerStyle(layer: textLayer)
             ),
-            .addAudioClip(clip: audioClip),
+            .addAudioClip(clip: AudioClip(assetID: UUID(), start: 0, duration: 3)),
             .deleteAudioClip(index: 0, clip: audioClip),
-            .setAudioVolume(id: audioClip.id, volume: 0.4, wasVolume: 1.0),
-            .addOverlay(layer: overlay),
+            .setAudioVolume(id: audioClip.id, volume: 0.4, wasVolume: audioClip.volume),
+            .addOverlay(
+                layer: OverlayLayer(
+                    assetID: UUID(), start: 0, end: 3,
+                    frame: NormalizedRect(x: 0.3, y: 0.8, width: 0.3, height: 0.08)
+                )
+            ),
             .deleteOverlay(index: 0, layer: overlay),
             .setOverlayFrame(id: overlay.id, frame: tight, wasFrame: overlay.frame),
             .setCanvas(canvas: .square1080, wasCanvas: .reel1080),

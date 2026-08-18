@@ -287,6 +287,12 @@ extension EditCommand {
             if reverting {
                 t.textLayers.insert(layer, at: min(index, t.textLayers.count))
             } else {
+                // Throwing rather than no-op'ing matters: `removeAll` on something that is not
+                // there succeeds silently, and reverting then *inserts* it — so an ineffective
+                // delete would undo into a layer appearing from nowhere.
+                guard t.textLayers.contains(where: { $0.id == layer.id }) else {
+                    throw ReframeError.documentCorrupt(detail: "text layer \(layer.id) not present")
+                }
                 t.textLayers.removeAll { $0.id == layer.id }
             }
 
@@ -318,6 +324,9 @@ extension EditCommand {
             if reverting {
                 t.audio.insert(clip, at: min(index, t.audio.count))
             } else {
+                guard t.audio.contains(where: { $0.id == clip.id }) else {
+                    throw ReframeError.documentCorrupt(detail: "audio clip \(clip.id) not present")
+                }
                 t.audio.removeAll { $0.id == clip.id }
             }
 
@@ -338,6 +347,9 @@ extension EditCommand {
             if reverting {
                 t.overlays.insert(layer, at: min(index, t.overlays.count))
             } else {
+                guard t.overlays.contains(where: { $0.id == layer.id }) else {
+                    throw ReframeError.documentCorrupt(detail: "overlay \(layer.id) not present")
+                }
                 t.overlays.removeAll { $0.id == layer.id }
             }
 
