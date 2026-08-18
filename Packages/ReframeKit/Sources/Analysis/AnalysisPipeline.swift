@@ -279,8 +279,42 @@ public actor AnalysisPipeline {
             createdAt: Date()
         )
         update(.buildStyle, .done(summary: "\(recipe.stats.sceneCount) slots ready"))
+        logSummary(recipe)
 
         return recipe
+    }
+
+    /// One compact block per analysis, so a device report says what was found without the
+    /// user having to export the recipe JSON. Structure only — no text content beyond counts.
+    private func logSummary(_ recipe: EditRecipe) {
+        let log = DiagnosticsLog.shared
+        log.info(
+            "recipe",
+            String(
+                format: "%d scenes, median %.2fs, %d transitions, %d text, bpm %@, confidence %.2f (weakest %@)",
+                recipe.stats.sceneCount, recipe.stats.medianSceneDuration, recipe.stats.transitionCount,
+                recipe.stats.textSlotCount,
+                recipe.beatGrid.map { String(format: "%.1f", $0.bpm.value) } ?? "-",
+                recipe.confidence.overall, recipe.confidence.weakest
+            )
+        )
+        for scene in recipe.scenes.prefix(40) {
+            let transition = scene.transitionIn.map {
+                "\($0.effectiveKind.rawValue)\($0.effectiveDuration > 0 ? String(format: " %.2fs", $0.effectiveDuration) : "")"
+            } ?? "start"
+            let subject = scene.slot.subjectRect.map {
+                String(format: "subj(%.2f,%.2f %.0f%%)", $0.value.centerX, $0.value.centerY, $0.value.area * 100)
+            } ?? "subj -"
+            log.info(
+                "recipe",
+                String(
+                    format: "  #%02d %.2f-%.2f %@ %@ %@(%.2f) %@ %@",
+                    scene.index + 1, scene.start, scene.end, scene.role.value.rawValue,
+                    scene.slot.framing.value.rawValue, scene.move.effectiveKind.rawValue,
+                    scene.move.kind.confidence, transition, subject
+                )
+            )
+        }
     }
 
     // MARK: - Helpers

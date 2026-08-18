@@ -54,7 +54,7 @@ already on the device, costs zero bytes of app size, needs no model download ste
 download-failure UX, and no third-party dependency. WhisperKit would be the better choice only
 if we needed Whisper-specific behaviour across many languages, which we do not.
 
-**But the MVP does not need transcription at all.** The only question the recipe asks of speech
+**Analysis still does not need transcription.** The only question the recipe asks of speech
 is *is there a voiceover here* — which decides whether the audio plan reports speech and whether
 beat-quantised cutting makes sense. That is answered deterministically in `AudioAnalyzer` from
 the STFT we have already computed: energy concentration in the 300–3400 Hz speech band, plus
@@ -62,8 +62,13 @@ whether the onset envelope's dominant modulation sits in the 3–8 Hz syllabic r
 at a musical beat. It is a heuristic, it is reported at ~0.7 confidence rather than dressed up
 as certainty, and it costs nothing extra.
 
-So the Speech framework is **not linked**. It is the chosen answer for a feature (speech-driven
-cutting) that is on the roadmap and not in the MVP.
+**Captions do.** `SpeechAnalyzer` / `SpeechTranscriber` (iOS 26) is now linked, in the
+`Intelligence` module, behind an availability check, for exactly one job: turning a voiceover or
+kept reference audio into timed caption layers with per-word `audioTimeRange`s
+(`CaptionTranscriber`, verified against the WWDC25 session 277 API surface in Aug 2026:
+`analyzeSequence(from:)`, `finalizeAndFinish(through:)`, `AssetInventory.assetInstallationRequest`).
+The language assets are downloaded by the system from Apple on first use — the app itself still
+has no networking code. WhisperKit remains the fallback should Apple's coverage disappoint.
 
 Deeper reasoning in [`03-ai-models.md`](03-ai-models.md).
 
@@ -140,6 +145,17 @@ activity — effectively unmaintained) and `Cabbage` (AVFoundation-based, same s
 VideoLab's `RenderLayer` / `RenderComposition` split is a genuinely good decomposition and our
 `RenderPlan` owes it a debt. Taking the *design* and leaving the *dependency* is the right trade
 for two abandoned repos.
+
+### Preview video decode
+
+Two ways to put a *playing* video clip in a Metal preview: `AVAssetReader` re-created on every
+seek (fast forward, painful when scrubbing — every scrub tick decodes from the last keyframe),
+or a muted `AVPlayer` + `AVPlayerItemVideoOutput` per asset (Apple's own decode, seek and rate
+machinery; `copyPixelBuffer(forItemTime:)` hands back an IOSurface-backed buffer that
+`CVMetalTextureCache` wraps with no copy). The player approach was chosen for preview; the
+reader for export, where access is strictly forward. Orientation is *not* baked in by a video
+composition (which would decode at full render size) but applied in the vertex shader from the
+track's `preferredTransform` — cheaper, and it lets the decoder downscale on the way out.
 
 ### Text rendering
 

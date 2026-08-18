@@ -44,6 +44,9 @@ struct EditorView: View {
         .toolbar { toolbarContent }
         .task { await prepareEngine() }
         .onAppear { model.markEditorOpen() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            engine?.handleMemoryPressure()
+        }
         .onDisappear {
             engine?.pause()
             let snapshotEngine = engine

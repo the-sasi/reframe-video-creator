@@ -109,6 +109,14 @@ public final class PreviewEngine: NSObject {
         if isPlaying { startAudio(at: currentTime) } else { seekAudio(to: currentTime) }
     }
 
+    /// Memory warning: drop every regenerable texture and player. The next frame reloads what
+    /// it needs at the current playhead; nothing else is lost.
+    public func handleMemoryPressure() {
+        Task { await frameProvider.evictAll() }
+        renderer.evictCaches()
+        DiagnosticsLog.shared.warning("preview", "evicted preview caches under memory pressure")
+    }
+
     /// The pool changed — an asset was added, replaced or removed. Textures for assets that
     /// are still present are kept; only the registry and the audio mix are refreshed.
     public func updateAssets(_ pool: AssetPool) {

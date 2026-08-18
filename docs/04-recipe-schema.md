@@ -63,7 +63,10 @@ turns "did my change to the motion analyser alter anything?" into a `diff`.
         "framing": { "value": "wide", "confidence": 0.68,
                      "basis": "salient area 0.21 of frame" },
         "motionEnergy": 0.12,
-        "preferSubject": "product"
+        "preferSubject": "product",
+        "subjectRect": { "value": { "x": 0.31, "y": 0.22, "w": 0.38, "h": 0.41 },
+                         "confidence": 0.66,
+                         "basis": "salient region centred (0.50, 0.42), 16% of frame" }
       },
 
       "move": {
@@ -130,9 +133,18 @@ turns "did my change to the motion analyser alter anything?" into a `diff`.
 
   "confidence": { "overall": 0.74, "scenes": 0.91, "motion": 0.78,
                   "text": 0.52, "audio": 0.86,
-                  "weakest": "text.style.category" }
+                  "weakest": "text.style.category" },
+
+  "tags": ["Fast Reel", "Beat Sync"],   // optional; library categories
+  "isBuiltIn": false                    // true only for the shipped starters
 }
 ```
+
+`subjectRect` is the composition record: where the reference's subject sat. The binder puts
+the user's subject (from `AssetFeatures.salientRect`) at the same anchor when it solves the crop
+window, so a landscape photo in a portrait slot is cropped around its subject rather than its
+centre. `tags` / `isBuiltIn` are optional so recipes written before the template library existed
+still decode.
 
 ---
 
@@ -164,6 +176,14 @@ unreadable and equality surprising. Conversion happens once, at the edge.
 **`sourceKind` records what the *reference* used** (image vs video), so the binder can prefer a
 user video for a slot the reference filled with motion footage. It is a preference, not a
 constraint; the user can put a still there.
+
+**Fidelity is a binder option, not a recipe field.** The same recipe binds three ways —
+Close Match, Use Style (no text slots), Use Structure (durations only) — because those are
+choices about *this project*, not facts about the reference.
+
+**Camera-move directions are named for the camera.** `translationX > 0` in the fit means the
+frame's centre moved right, i.e. content slid right, i.e. the camera panned *left*; the compiled
+crop window travels the opposite way to the measured content motion so the reproduction matches.
 
 ---
 
