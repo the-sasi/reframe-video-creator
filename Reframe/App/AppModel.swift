@@ -35,6 +35,14 @@ final class AppModel {
     var document: TimelineDocument?
     var exportSettings: ExportSettings = .default
 
+    /// Identity of the project being edited.
+    ///
+    /// Deliberately *not* derived from `timeline.id`. `RecipeBinder` generates that
+    /// deterministically from the reference's fingerprint, so two projects made from the same
+    /// reference would collide and the second would silently overwrite the first. Determinism
+    /// is right for recipe content and wrong for project identity.
+    var currentProjectID = UUID()
+
     /// Recent projects for the Continue strip.
     var recentProjects: [ProjectSummary] = []
     var savedRecipes: [EditRecipe] = []
@@ -72,6 +80,53 @@ final class AppModel {
         assignment = AssetAssignment()
         assetFeatures = [:]
         document = nil
+        currentProjectID = UUID()
+    }
+
+    /// Builds a timeline with no recipe — the "Start From Scratch" path.
+    ///
+    /// Previously this route navigated to the content screen and then dead-ended, because both
+    /// `autoArrange()` and `bindTimeline()` bail out when `recipe` is nil. A default structure
+    /// is a better answer than a broken menu item: even spacing, alternating gentle moves, hard
+    /// cuts. Everything is editable afterwards, which is the point of starting from scratch.
+    func buildScratchTimeline(secondsPerClip: Double = 2.0) {
+        let canvas = CanvasSpec.reel1080
+        var timeline = Timeline(id: UUID(), canvas: canvas, recipeID: nil)
+
+        timeline.clips = assets.visuals.enumerated().map { index, asset in
+            // Alternate push-in and pull-out so a run of stills does not read as a slideshow.
+            let pushesIn = index.isMultiple(of: 2)
+            let tight = NormalizedRect.full.scaled(by: 0.88)
+            return VideoClip(
+                assetID: asset.id,
+                slotID: "scratch_\(index + 1)",
+                start: Double(index) * secondsPerClip,
+                duration: secondsPerClip,
+                cropStart: pushesIn ? .full : tight,
+                cropEnd: pushesIn ? tight : .full,
+                easing: .easeInOut,
+                transitionIn: index == 0 ? nil : Transition(kind: .cut, duration: 0),
+                volume: 0
+            )
+        }
+        timeline.relayout()
+
+        if let musicID = content.musicAssetID {
+            timeline.audio = [
+                AudioClip(
+                    assetID: musicID, start: 0, duration: timeline.duration,
+                    fadeIn: 0.15, fadeOut: min(0.8, timeline.duration * 0.1)
+                )
+            ]
+        }
+
+        document = TimelineDocument(timeline: timeline)
+        exportSettings = ExportSettings(
+            width: canvas.width, height: canvas.height, fps: canvas.fps, preferHEVC: true
+        )
+        DiagnosticsLog.shared.info(
+            "app", "scratch timeline: \(timeline.clips.count) clips, \(String(format: "%.1fs", timeline.duration))"
+        )
     }
 
     func returnHome() {
@@ -130,21 +185,22 @@ final class AppModel {
 
     // MARK: - Persistence
 
+    /// Saves whether or not a recipe is involved — a scratch project is still a project.
     func saveProject() async {
-        guard let document, let recipe else { return }
+        guard let document else { return }
         let project = Project(
-            id: document.timeline.id,
-            title: recipe.title,
+            id: currentProjectID,
+            title: recipe?.title ?? "Untitled",
             timeline: document.timeline,
             assets: assets,
             content: content,
             assignment: assignment,
-            recipeID: recipe.id,
+            recipeID: recipe?.id,
             exportSettings: exportSettings
         )
         do {
             try await projectStore.save(project, history: document.history)
-            try await projectStore.save(recipe: recipe)
+            if let recipe { try await projectStore.save(recipe: recipe) }
             await refreshLibrary()
         } catch {
             present(.documentCorrupt(detail: "\(error)"))
@@ -154,6 +210,7 @@ final class AppModel {
     func openProject(id: UUID) async {
         do {
             let project = try await projectStore.load(id: id)
+            currentProjectID = project.id
             assets = project.assets
             content = project.content
             assignment = project.assignment

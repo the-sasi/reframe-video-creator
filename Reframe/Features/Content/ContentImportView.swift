@@ -46,8 +46,8 @@ struct ContentImportView: View {
         .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom) {
             PrimaryButton(
-                title: "Auto Arrange",
-                systemImage: "wand.and.rays",
+                title: model.recipe == nil ? "Create Video" : "Auto Arrange",
+                systemImage: model.recipe == nil ? "sparkles" : "wand.and.rays",
                 isEnabled: hasEnoughAssets,
                 isBusy: isPreparing
             ) {
@@ -559,6 +559,18 @@ struct ContentImportView: View {
     private func arrange() async {
         isPreparing = true
         defer { isPreparing = false }
+
+        // No recipe means "Start From Scratch". There are no slots to map assets into, so skip
+        // straight to a default timeline and the editor rather than walking into a mapping
+        // screen with nothing to show.
+        guard model.recipe != nil else {
+            DiagnosticsLog.shared.info(
+                "content", "scratch build from \(model.assets.visuals.count) assets"
+            )
+            model.buildScratchTimeline()
+            model.path.append(.editor)
+            return
+        }
 
         DiagnosticsLog.shared.info(
             "content",

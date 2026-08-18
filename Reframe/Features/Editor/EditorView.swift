@@ -16,6 +16,8 @@ struct EditorView: View {
     @State private var currentTime: Double = 0
     @State private var undoToast: String?
     @State private var showsAudioSheet = false
+    @State private var showsTextSheet = false
+    @State private var showsStyleSheet = false
 
     enum Tool: String, CaseIterable, Identifiable {
         case edit, text, audio, style, export
@@ -114,6 +116,12 @@ struct EditorView: View {
         .sheet(isPresented: $showsAudioSheet) {
             AudioSheet(document: document)
         }
+        .sheet(isPresented: $showsTextSheet) {
+            TextSheet(document: document, currentTime: currentTime)
+        }
+        .sheet(isPresented: $showsStyleSheet) {
+            StyleSheet(document: document, selectedClipID: selectedClipID)
+        }
     }
 
     @ViewBuilder
@@ -163,7 +171,11 @@ struct EditorView: View {
                         model.path.append(.export)
                     case .audio:
                         showsAudioSheet = true
-                    default:
+                    case .text:
+                        showsTextSheet = true
+                    case .style:
+                        showsStyleSheet = true
+                    case .edit:
                         withAnimation(Theme.Motion.quick) { activeTool = tool }
                     }
                 } label: {

@@ -77,7 +77,10 @@ struct GenerateView: View {
 
     private func generate() async {
         guard let recipe = model.recipe else {
+            // Previously this presented an alert and left the user stranded on a dead screen
+            // with no way back. Navigate off it too.
             model.present(.analysisFailed(stage: "building", detail: "no recipe"))
+            if !model.path.isEmpty { model.path.removeLast() }
             return
         }
 
@@ -87,6 +90,7 @@ struct GenerateView: View {
         model.bindTimeline()
         guard let document = model.document else {
             model.present(.renderSetupFailed(detail: "binder produced no timeline"))
+            if !model.path.isEmpty { model.path.removeLast() }
             return
         }
         await advance(summary: "\(document.timeline.clips.count) clips")
