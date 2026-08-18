@@ -141,7 +141,14 @@ struct AudioSheet: View {
                             Button(role.displayName) { setRole(role, for: clip) }
                         }
                     } label: {
-                        Chip(title: clip.role.displayName, systemImage: "tag") {}
+                        HStack(spacing: 5) {
+                            Image(systemName: "tag").font(.system(size: 11, weight: .semibold))
+                            Text(clip.role.displayName).font(.system(size: 13, weight: .medium, design: .rounded))
+                            Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold))
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .foregroundStyle(Theme.Palette.primaryText)
+                        .background(Theme.Palette.surfaceRaised, in: Capsule())
                     }
                 }
                 Button(role: .destructive) {
