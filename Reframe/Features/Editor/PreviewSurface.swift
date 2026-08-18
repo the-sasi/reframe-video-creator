@@ -22,29 +22,64 @@ struct PreviewSurface: UIViewRepresentable {
 /// Preview plus transport, sized to the canvas aspect ratio.
 struct PreviewPane: View {
     let engine: PreviewEngine
-    @State private var isScrubbing = false
+    /// Optional so the pane can be used without an editable document.
+    var document: TimelineDocument?
+    var currentTime: Double = 0
+    @Binding var selectedTextID: UUID?
+
+    init(
+        engine: PreviewEngine,
+        document: TimelineDocument? = nil,
+        currentTime: Double = 0,
+        selectedTextID: Binding<UUID?> = .constant(nil)
+    ) {
+        self.engine = engine
+        self.document = document
+        self.currentTime = currentTime
+        self._selectedTextID = selectedTextID
+    }
 
     var body: some View {
-        ZStack {
-            Color.black
+        GeometryReader { geometry in
+            // The overlay must agree with the MTKView to the pixel, so both are laid out from
+            // the same fitted size rather than one using `.aspectRatio` and the other guessing.
+            let fitted = fittedCanvasSize(
+                container: geometry.size, canvas: engine.timeline.canvas
+            )
 
-            PreviewSurface(engine: engine)
-                .aspectRatio(
-                    Double(engine.timeline.canvas.width) / Double(engine.timeline.canvas.height),
-                    contentMode: .fit
-                )
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous))
-                .onTapGesture { engine.togglePlayback() }
+            ZStack {
+                Color.black
 
-            if let error = engine.lastError {
-                VStack(spacing: Theme.Space.s) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 24, weight: .light))
-                    Text(error.presentation.title)
-                        .font(Theme.Font.callout)
+                PreviewSurface(engine: engine)
+                    .frame(width: fitted.width, height: fitted.height)
+                    .clipShape(
+                        RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
+                    )
+                    .onTapGesture {
+                        selectedTextID = nil
+                        engine.togglePlayback()
+                    }
+
+                if let document {
+                    TextOverlayEditor(
+                        document: document,
+                        currentTime: currentTime,
+                        selectedTextID: $selectedTextID,
+                        canvasSize: fitted
+                    )
                 }
-                .foregroundStyle(.white.opacity(0.8))
+
+                if let error = engine.lastError {
+                    VStack(spacing: Theme.Space.s) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 24, weight: .light))
+                        Text(error.presentation.title)
+                            .font(Theme.Font.callout)
+                    }
+                    .foregroundStyle(.white.opacity(0.8))
+                }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .overlay(alignment: .bottom) {
             transport

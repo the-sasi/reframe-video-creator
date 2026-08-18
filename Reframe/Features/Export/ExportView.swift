@@ -61,11 +61,18 @@ struct ExportView: View {
                 Picker("Size", selection: sizeBinding) {
                     Text("720p").tag(SizeOption.hd720)
                     Text("1080p").tag(SizeOption.hd1080)
-                    if Self.supports4K {
-                        Text("4K").tag(SizeOption.uhd4K)
-                    }
+                    Text("4K").tag(SizeOption.uhd4K)
                 }
                 .pickerStyle(.segmented)
+
+                if model.exportSettings.width >= 2160 {
+                    Label(
+                        "4K takes noticeably longer and warms the phone. If it fails, the error offers a 720p retry.",
+                        systemImage: "thermometer.medium"
+                    )
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.Palette.secondaryText)
+                }
             }
 
             VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -275,12 +282,10 @@ struct ExportView: View {
 
     private enum SizeOption: Hashable { case hd720, hd1080, uhd4K }
 
-    /// A rough capability gate. 4K export is offered only where it is plausibly sustainable —
-    /// offering it on hardware that will thermally throttle halfway through is worse than not
-    /// offering it. **VERIFY REQUIRED**: replace with a measured check on real devices.
-    private static var supports4K: Bool {
-        ProcessInfo.processInfo.physicalMemory > 5_000_000_000
-    }
+    // 4K is now always offered. The previous gate was a guess at physical memory carrying a
+    // VERIFY REQUIRED, and a guess that silently removes a capability is worse than letting the
+    // export try and fail — especially since the failure path already offers a 720p retry.
+    // Hiding an option on unmeasured grounds is not caution, it is a different kind of wrong.
 
     private var sizeBinding: Binding<SizeOption> {
         Binding(

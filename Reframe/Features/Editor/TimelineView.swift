@@ -101,6 +101,7 @@ final class TimelineScrollView: UIView, UIScrollViewDelegate {
 
     // Track heights: video strip dominates, text and audio are thin ribbons. Three lanes
     // maximum on screen — a denser timeline on a phone is a desktop idea.
+    static let rulerHeight: CGFloat = 14
     static let videoTrackHeight: CGFloat = 56
     static let textTrackHeight: CGFloat = 18
     static let audioTrackHeight: CGFloat = 22
@@ -167,8 +168,8 @@ final class TimelineScrollView: UIView, UIScrollViewDelegate {
     private func updateContentSize() {
         guard bounds.width > 0 else { return }
         let width = CGFloat(max(timeline.duration, 0.1) / secondsPerPoint)
-        let height = Self.videoTrackHeight + Self.textTrackHeight + Self.audioTrackHeight
-            + Self.trackSpacing * 2
+        let height = Self.rulerHeight + Self.videoTrackHeight + Self.textTrackHeight
+            + Self.audioTrackHeight + Self.trackSpacing * 2
 
         contentView.frame = CGRect(x: 0, y: (bounds.height - height) / 2, width: width, height: height)
         scrollView.contentSize = CGSize(width: width, height: bounds.height)
@@ -279,12 +280,18 @@ final class TimelineContentView: UIView {
     override func draw(_ rect: CGRect) {
         guard let context = UIGraphicsGetCurrentContext() else { return }
 
+        drawTimeRuler(context: context, rect: rect)
+
+        // Everything below the ruler is offset by its height.
+        let rulerHeight = TimelineScrollView.rulerHeight
         let videoHeight = TimelineScrollView.videoTrackHeight
         let textHeight = TimelineScrollView.textTrackHeight
         let audioHeight = TimelineScrollView.audioTrackHeight
         let spacing = TimelineScrollView.trackSpacing
 
         func x(_ time: Double) -> CGFloat { CGFloat(time / secondsPerPoint) }
+        context.translateBy(x: 0, y: rulerHeight)
+        defer { context.translateBy(x: 0, y: -rulerHeight) }
 
         // --- Beat ticks, behind everything ---
         if let beats = beatGrid?.beats {
@@ -368,6 +375,43 @@ final class TimelineContentView: UIView {
             context.addPath(path.cgPath)
             context.fillPath()
         }
+    }
+
+    /// Time ticks along the top.
+    ///
+    /// The interval adapts to zoom, so labels never collide and never thin out to uselessness —
+    /// at a 40-second view you get 10s marks, at half a second you get tenths.
+    private func drawTimeRuler(context: CGContext, rect: CGRect) {
+        let candidates: [Double] = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60]
+        // Aim for a mark roughly every 60pt.
+        let targetSeconds = secondsPerPoint * 60
+        let interval = candidates.first { $0 >= targetSeconds } ?? 60
+
+        let startTime = max(0, Double(rect.minX) * secondsPerPoint)
+        let endTime = Double(rect.maxX) * secondsPerPoint
+        guard interval > 0, endTime > startTime else { return }
+
+        context.setStrokeColor(UIColor(Theme.Palette.separator).withAlphaComponent(0.5).cgColor)
+        context.setLineWidth(1)
+
+        var time = (startTime / interval).rounded(.down) * interval
+        while time <= endTime {
+            let x = CGFloat(time / secondsPerPoint)
+            context.move(to: CGPoint(x: x, y: 0))
+            context.addLine(to: CGPoint(x: x, y: 6))
+
+            let label = interval < 1
+                ? String(format: "%.1f", time)
+                : String(format: "%d:%02d", Int(time) / 60, Int(time) % 60)
+            drawLabel(
+                label,
+                in: CGRect(x: x + 3, y: 0, width: 46, height: 12),
+                context: context,
+                size: 8
+            )
+            time += interval
+        }
+        context.strokePath()
     }
 
     private func drawLabel(

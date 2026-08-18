@@ -18,6 +18,7 @@ struct EditorView: View {
     @State private var showsAudioSheet = false
     @State private var showsTextSheet = false
     @State private var showsStyleSheet = false
+    @State private var selectedTextID: UUID?
 
     enum Tool: String, CaseIterable, Identifiable {
         case edit, text, audio, style, export
@@ -79,8 +80,13 @@ struct EditorView: View {
 
     private func editor(engine: PreviewEngine, document: TimelineDocument) -> some View {
         VStack(spacing: 0) {
-            PreviewPane(engine: engine)
-                .frame(maxHeight: .infinity)
+            PreviewPane(
+                engine: engine,
+                document: document,
+                currentTime: currentTime,
+                selectedTextID: $selectedTextID
+            )
+            .frame(maxHeight: .infinity)
 
             TimelineView(
                 timeline: document.timeline,
