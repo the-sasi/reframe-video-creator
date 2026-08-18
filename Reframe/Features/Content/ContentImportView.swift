@@ -262,13 +262,19 @@ struct ContentImportView: View {
     // MARK: - Extras
 
     private var extrasSection: some View {
-        @Bindable var model = model
-
-        return VStack(alignment: .leading, spacing: Theme.Space.s) {
+        // No `@Bindable var model = model` here: shadowing the environment object makes the
+        // async closures further down capture a `var`, which Swift 6 rejects. An explicit
+        // binding for the one toggle that needs it is narrower and compiles.
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text("Optional").font(Theme.Font.sectionTitle)
 
             if let palette = model.recipe?.palette, !palette.dominant.isEmpty {
-                Toggle(isOn: $model.matchReferenceLook) {
+                Toggle(
+                    isOn: Binding(
+                        get: { model.matchReferenceLook },
+                        set: { model.matchReferenceLook = $0 }
+                    )
+                ) {
                     HStack(spacing: Theme.Space.m) {
                         HStack(spacing: -6) {
                             ForEach(palette.dominant.prefix(3), id: \.self) { hex in
