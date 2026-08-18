@@ -148,13 +148,15 @@ private struct TextLayerEditor: View {
             }
 
             HStack(spacing: Theme.Space.m) {
+                // `SlotTextAlignment` rather than `TextAlignment`: SwiftUI declares its own,
+                // so the bare name is ambiguous in any view file.
                 Picker(
                     "Align",
                     selection: styleBinding(\.alignment, apply: { $0.alignment = $1 })
                 ) {
-                    Image(systemName: "text.alignleft").tag(TextAlignment.leading)
-                    Image(systemName: "text.aligncenter").tag(TextAlignment.center)
-                    Image(systemName: "text.alignright").tag(TextAlignment.trailing)
+                    Image(systemName: "text.alignleft").tag(SlotTextAlignment.leading)
+                    Image(systemName: "text.aligncenter").tag(SlotTextAlignment.center)
+                    Image(systemName: "text.alignright").tag(SlotTextAlignment.trailing)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
