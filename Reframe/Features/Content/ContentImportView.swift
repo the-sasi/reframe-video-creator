@@ -729,7 +729,8 @@ private struct AssetThumbnail: View {
         ).firstObject else { return nil }
 
         let options = PHImageRequestOptions()
-        options.isNetworkAccessAllowed = false
+        // iCloud-resident photos would otherwise show a permanent spinner in the grid.
+        options.isNetworkAccessAllowed = true
         options.deliveryMode = .opportunistic
         options.resizeMode = .fast
 

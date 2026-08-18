@@ -110,32 +110,66 @@ public final class PreviewEngine: NSObject {
 
     private func startAudio(at time: Double) {
         guard let clip = timeline.audio.first else { return }
-        if audioPlayer == nil {
-            Task { await prepareAudioPlayer(for: clip) }
+        guard let audioPlayer else {
+            // Not ready yet. Preparing is now driven by `currentAssetPool` being set rather
+            // than by the first `play()`, so this is a genuine miss rather than the normal
+            // path — previously the first play was *always* silent because preparation was
+            // kicked off here and then returned immediately.
+            DiagnosticsLog.shared.warning("preview", "audio not prepared yet; playing silent")
+            prepareAudioPlayer(for: clip)
             return
         }
-        audioPlayer?.currentTime = max(0, clip.sourceStart + (time - clip.start))
-        audioPlayer?.play()
+        audioPlayer.currentTime = max(0, clip.sourceStart + (time - clip.start))
+        audioPlayer.volume = Float(clip.volume)
+        audioPlayer.play()
     }
 
-    private func prepareAudioPlayer(for clip: AudioClip) async {
+    /// Synchronous: `AVAudioPlayer(contentsOf:)` reads a local file and does not need to be
+    /// awaited. Making it async was what created the race.
+    private func prepareAudioPlayer(for clip: AudioClip) {
+        guard let reference = currentAssetPool?[clip.assetID] else {
+            DiagnosticsLog.shared.warning(
+                "preview", "audio clip references an asset not in the pool"
+            )
+            return
+        }
         // Only file-backed audio can drive AVAudioPlayer directly. Photos-library audio would
         // need an export first, which is not worth doing for preview — the export path handles
         // it correctly either way.
-        guard let reference = currentAssetPool?[clip.assetID],
-              case .sandboxRelativePath(let path) = reference.origin else { return }
+        guard case .sandboxRelativePath(let path) = reference.origin else {
+            DiagnosticsLog.shared.warning(
+                "preview", "audio origin is not a local file; preview will be silent"
+            )
+            return
+        }
         let url = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(path)
-        audioPlayer = try? AVAudioPlayer(contentsOf: url)
-        audioPlayer?.prepareToPlay()
-        audioPlayer?.volume = Float(clip.volume)
-        if isPlaying { startAudio(at: currentTime) }
+
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.prepareToPlay()
+            player.volume = Float(clip.volume)
+            audioPlayer = player
+            DiagnosticsLog.shared.info("preview", "audio ready: \(reference.displayName)")
+        } catch {
+            DiagnosticsLog.shared.failure(
+                "preview", "audio load failed: \(error.localizedDescription)"
+            )
+        }
     }
 
-    /// Set by the owning view model so audio can be resolved. Kept weak-by-value (a struct) so
-    /// it cannot create a retain cycle.
-    public var currentAssetPool: AssetPool?
+    /// Set by the owning view when the project's assets change. Preparing the player here
+    /// rather than lazily is what removes the first-play race.
+    public var currentAssetPool: AssetPool? {
+        didSet {
+            guard let clip = timeline.audio.first else {
+                audioPlayer = nil
+                return
+            }
+            prepareAudioPlayer(for: clip)
+        }
+    }
 
     // MARK: - Rendering
 

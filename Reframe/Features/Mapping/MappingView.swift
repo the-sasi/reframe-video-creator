@@ -208,7 +208,7 @@ private struct MappedThumbnail: View {
         ).firstObject else { return }
 
         let options = PHImageRequestOptions()
-        options.isNetworkAccessAllowed = false
+        options.isNetworkAccessAllowed = true
         options.resizeMode = .fast
 
         image = await withCheckedContinuation { continuation in

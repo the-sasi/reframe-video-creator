@@ -35,6 +35,8 @@ public final class TextureLoader: @unchecked Sendable {
     private var order: [UUID] = []
     private let limit: Int
     private let lock = NSLock()
+    /// One long-lived texture per video asset, overwritten each frame.
+    private var reusable: [UUID: MTLTexture] = [:]
 
     public init(device: MTLDevice, limit: Int = 12) {
         self.device = device
@@ -73,11 +75,67 @@ public final class TextureLoader: @unchecked Sendable {
         )
     }
 
+    /// Uploads into a texture we already own, rather than allocating a new one.
+    ///
+    /// Video frames change every frame, so `make(from:)` would allocate and discard a
+    /// full-canvas texture per frame — roughly 8 MB each at 1080x1920, which is exactly the
+    /// churn `TexturePool` exists to avoid and which the export path was bypassing entirely.
+    /// Reusing one texture per asset makes steady-state allocation zero.
+    public func reusableTexture(
+        from image: CGImage, key: UUID, maxDimension: Int
+    ) -> MTLTexture? {
+        let width = min(image.width, maxDimension)
+        let height = min(image.height, maxDimension)
+        guard width > 0, height > 0 else { return nil }
+
+        lock.lock()
+        var texture = reusable[key]
+        if texture == nil || texture!.width != width || texture!.height != height {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rgba8Unorm, width: width, height: height, mipmapped: false
+            )
+            descriptor.usage = .shaderRead
+            descriptor.storageMode = .shared
+            texture = device.makeTexture(descriptor: descriptor)
+            reusable[key] = texture
+        }
+        lock.unlock()
+
+        guard let texture else { return nil }
+
+        // Draw into a plain RGBA8 buffer: CGImage can arrive in any of a dozen pixel formats
+        // and normalising here is cheaper than handling them all.
+        let bytesPerRow = width * 4
+        var buffer = [UInt8](repeating: 0, count: bytesPerRow * height)
+        let drawn = buffer.withUnsafeMutableBytes { raw -> Bool in
+            guard let context = CGContext(
+                data: raw.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: bytesPerRow,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drawn else { return nil }
+
+        buffer.withUnsafeBytes { raw in
+            texture.replace(
+                region: MTLRegionMake2D(0, 0, width, height),
+                mipmapLevel: 0,
+                withBytes: raw.baseAddress!,
+                bytesPerRow: bytesPerRow
+            )
+        }
+        return texture
+    }
+
     public func evictAll() {
         lock.lock()
         defer { lock.unlock() }
         cache.removeAll()
         order.removeAll()
+        reusable.removeAll()
     }
 }
 
@@ -286,7 +344,10 @@ public actor ExportFrameProvider: FrameProvider {
             )
         }
         guard let image = await videoReaders[reference.id]?.frame(at: time) else { return nil }
-        return loader.make(from: image)
+        // Reuse this asset's texture instead of allocating one per frame.
+        return loader.reusableTexture(
+            from: image, key: reference.id, maxDimension: canvasDimension
+        )
     }
 
     public func finish() {

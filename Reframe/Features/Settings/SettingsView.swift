@@ -53,8 +53,13 @@ struct SettingsView: View {
                 )
                 privacyRow(
                     icon: "wifi.slash",
-                    title: "No network access",
-                    detail: "Reframe makes no requests. There is no telemetry, no analytics, no crash reporting and no remote configuration."
+                    title: "Nothing is sent anywhere",
+                    detail: "Reframe contacts no servers of its own and no third parties. No telemetry, no analytics, no crash reporting, no remote configuration, no accounts."
+                )
+                privacyRow(
+                    icon: "icloud.and.arrow.down",
+                    title: "iCloud photos download on demand",
+                    detail: "If a photo you pick lives in iCloud rather than on this iPhone, the system fetches your own copy of it. That is the only network activity involved, and nothing is uploaded."
                 )
                 privacyRow(
                     icon: "photo",

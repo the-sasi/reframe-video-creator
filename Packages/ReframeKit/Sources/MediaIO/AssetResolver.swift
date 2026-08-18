@@ -121,7 +121,15 @@ public actor AssetResolver {
         guard let phAsset = fetch.firstObject else { return nil }
 
         let options = PHImageRequestOptions()
-        options.isNetworkAccessAllowed = false  // iCloud fetches are a network request; we do not make them
+        // Allowed, deliberately. With "Optimise iPhone Storage" on — which is the default for
+        // most people — full-resolution originals live in iCloud and only a thumbnail is local.
+        // Refusing the fetch meant every such photo silently resolved to nil and its slot went
+        // blank with no explanation.
+        //
+        // This is not a network call *we* make: it is the system retrieving the user's own
+        // photo, from their own iCloud, because they explicitly picked it. Nothing is uploaded
+        // and nothing reaches a third party.
+        options.isNetworkAccessAllowed = true
         options.deliveryMode = .highQualityFormat
         options.resizeMode = .exact
         options.isSynchronous = false
@@ -143,6 +151,14 @@ public actor AssetResolver {
                 let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
                 if isDegraded { return }
                 resumed = true
+
+                if image == nil {
+                    let reason = (info?[PHImageErrorKey] as? Error)?.localizedDescription
+                        ?? "no image returned"
+                    DiagnosticsLog.shared.warning(
+                        "assets", "photo \(localIdentifier.prefix(8)) failed: \(reason)"
+                    )
+                }
                 continuation.resume(returning: image?.platformCGImage)
             }
         }
@@ -156,7 +172,8 @@ public actor AssetResolver {
             let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
             guard let phAsset = fetch.firstObject else { return nil }
             let options = PHVideoRequestOptions()
-            options.isNetworkAccessAllowed = false
+            // Same reasoning as stills: an iCloud-resident video would otherwise resolve to nil.
+            options.isNetworkAccessAllowed = true
             options.deliveryMode = .highQualityFormat
             // `AVAsset` is not Sendable, so resuming a continuation with one directly is a
             // data-race diagnostic under Swift 6. Boxing confines the unchecked claim: the

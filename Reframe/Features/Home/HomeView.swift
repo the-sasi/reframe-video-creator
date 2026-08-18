@@ -45,28 +45,43 @@ struct HomeView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 4) {
             Text("Reframe")
-                .font(Theme.Font.displayTitle)
+                .font(Theme.Font.hero)
+                .foregroundStyle(Theme.Palette.primaryText)
             Text("Your content, their edit.")
                 .font(Theme.Font.callout)
                 .foregroundStyle(Theme.Palette.secondaryText)
         }
-        .padding(.top, Theme.Space.s)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, Theme.Space.xs)
     }
 
     private var createCard: some View {
         Button {
             model.startFromReference()
         } label: {
-            VStack(alignment: .leading, spacing: Theme.Space.m) {
-                Image(systemName: "wand.and.stars")
-                    .font(.system(size: 30, weight: .light))
-                    .foregroundStyle(Theme.Palette.accent)
+            VStack(alignment: .leading, spacing: Theme.Space.l) {
+                HStack(alignment: .top) {
+                    // A filled circular glyph rather than a bare symbol — gives the card a
+                    // focal point at a glance instead of a uniform block of text.
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 58, height: 58)
+                        .background(Theme.Palette.accentGradient, in: Circle())
+                        .shadow(color: Theme.Palette.accent.opacity(0.4), radius: 12, y: 5)
+                    Spacer()
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Theme.Palette.accent)
+                        .padding(10)
+                        .background(Theme.Palette.accentSoft, in: Circle())
+                }
 
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Text("Create From Reference")
-                        .font(.system(.title3, design: .rounded, weight: .bold))
+                        .font(Theme.Font.cardTitle)
                         .foregroundStyle(Theme.Palette.primaryText)
                     Text("Pick a reel you like. Reframe learns how it was cut, then rebuilds it with your photos.")
                         .font(Theme.Font.callout)
@@ -75,25 +90,28 @@ struct HomeView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                HStack(spacing: Theme.Space.xs) {
-                    Text("Start")
-                        .font(.system(.subheadline, design: .rounded, weight: .semibold))
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 12, weight: .semibold))
+                HStack(spacing: Theme.Space.s) {
+                    ForEach(
+                        [("scissors", "Learns cuts"), ("camera.filters", "Copies the look"), ("waveform", "Finds the beat")],
+                        id: \.0
+                    ) { symbol, label in
+                        HStack(spacing: 4) {
+                            Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
+                            Text(label).font(.system(size: 11, weight: .medium, design: .rounded))
+                        }
+                        .foregroundStyle(Theme.Palette.secondaryText)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(Theme.Palette.surfaceRaised, in: Capsule())
+                    }
                 }
-                .foregroundStyle(Theme.Palette.accent)
             }
             .padding(Theme.Space.l)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                LinearGradient(
-                    colors: [Theme.Palette.accentSoft, Theme.Palette.surface],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                ),
-                in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-            )
+            .heroSurface()
         }
         .buttonStyle(.plain)
+        .pressable()
     }
 
     private var continueStrip: some View {
@@ -179,25 +197,46 @@ private struct ProjectCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
-                .fill(Theme.Palette.surfaceRaised)
+                .fill(
+                    LinearGradient(
+                        colors: [Theme.Palette.surfaceRaised, Theme.Palette.surface],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
                 .aspectRatio(9.0 / 16.0, contentMode: .fit)
-                .frame(width: 108)
+                .frame(width: 112)
                 .overlay {
-                    Image(systemName: "film")
+                    Image(systemName: "film.stack")
                         .font(.system(size: 22, weight: .light))
                         .foregroundStyle(Theme.Palette.tertiaryText)
                 }
+                .overlay(alignment: .bottomLeading) {
+                    // Scene count on the thumbnail: it is the one number that distinguishes
+                    // two projects at a glance when neither has a rendered preview yet.
+                    Text("\(project.sceneCount)")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(.black.opacity(0.55), in: Capsule())
+                        .padding(7)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
+                        .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(project.title)
-                    .font(.system(.footnote, design: .rounded, weight: .medium))
+                    .font(.system(.footnote, design: .rounded, weight: .semibold))
                     .foregroundStyle(Theme.Palette.primaryText)
                     .lineLimit(1)
                 Text(project.modifiedAt, format: .relative(presentation: .named))
                     .font(Theme.Font.caption)
-                    .foregroundStyle(Theme.Palette.secondaryText)
+                    .foregroundStyle(Theme.Palette.tertiaryText)
             }
-            .frame(width: 108, alignment: .leading)
+            .frame(width: 112, alignment: .leading)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(project.title), \(project.sceneCount) scenes")

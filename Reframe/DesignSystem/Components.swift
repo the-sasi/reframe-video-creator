@@ -12,25 +12,35 @@ struct PrimaryButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            Haptics.step()
+            action()
+        } label: {
             HStack(spacing: Theme.Space.s) {
                 if isBusy {
                     ProgressView().tint(.white)
                 } else if let systemImage {
                     Image(systemName: systemImage)
+                        .font(.system(size: 15, weight: .semibold))
                 }
                 Text(title)
                     .font(.system(.headline, design: .rounded, weight: .semibold))
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 54)
+            .frame(height: 56)
             .foregroundStyle(.white)
-            .background(
-                Theme.Palette.accent.opacity(isEnabled ? 1 : 0.35),
-                in: RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
+            .background {
+                RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
+                    .fill(Theme.Palette.accentGradient)
+                    .opacity(isEnabled ? 1 : 0.32)
+            }
+            .shadow(
+                color: Theme.Palette.accent.opacity(isEnabled ? 0.35 : 0),
+                radius: 14, x: 0, y: 6
             )
         }
         .disabled(!isEnabled || isBusy)
+        .pressable()
         .accessibilityLabel(title)
     }
 }
@@ -43,17 +53,17 @@ struct SecondaryButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Theme.Space.s) {
-                if let systemImage { Image(systemName: systemImage) }
-                Text(title).font(.system(.subheadline, design: .rounded, weight: .medium))
+                if let systemImage {
+                    Image(systemName: systemImage).font(.system(size: 14, weight: .medium))
+                }
+                Text(title).font(.system(.subheadline, design: .rounded, weight: .semibold))
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 48)
+            .frame(height: 50)
             .foregroundStyle(Theme.Palette.primaryText)
-            .background(
-                Theme.Palette.surface,
-                in: RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
-            )
+            .cardSurface(.flat, radius: Theme.Radius.medium)
         }
+        .pressable()
     }
 }
 
@@ -140,21 +150,55 @@ struct MetricTile: View {
     var systemImage: String?
 
     var body: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 5) {
             if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.system(size: 13))
+                    .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Theme.Palette.accent)
+                    .frame(height: 18)
             }
-            Text(value).font(Theme.Font.metric)
-            Text(label)
+            Text(value)
+                .font(Theme.Font.metric)
+                .contentTransition(.numericText())
+            Text(label.uppercased())
                 .font(Theme.Font.metricLabel)
-                .foregroundStyle(Theme.Palette.secondaryText)
+                .tracking(0.6)
+                .foregroundStyle(Theme.Palette.tertiaryText)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, Theme.Space.s)
+        .padding(.vertical, Theme.Space.m)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(value) \(label)")
+    }
+}
+
+/// A numbered step marker for the main flow, so you always know where you are in it.
+struct FlowProgress: View {
+    let step: Int
+    let total: Int
+    let title: String
+
+    var body: some View {
+        HStack(spacing: Theme.Space.s) {
+            HStack(spacing: 4) {
+                ForEach(1...total, id: \.self) { index in
+                    Capsule()
+                        .fill(
+                            index <= step
+                                ? AnyShapeStyle(Theme.Palette.accentGradient)
+                                : AnyShapeStyle(Theme.Palette.hairline)
+                        )
+                        .frame(width: index == step ? 22 : 7, height: 5)
+                        .animation(Theme.Motion.bouncy, value: step)
+                }
+            }
+            Text(title)
+                .font(.system(.caption, design: .rounded, weight: .medium))
+                .foregroundStyle(Theme.Palette.secondaryText)
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Step \(step) of \(total): \(title)")
     }
 }
 
