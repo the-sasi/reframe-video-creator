@@ -35,6 +35,14 @@ final class AppModel {
     var document: TimelineDocument?
     var exportSettings: ExportSettings = .default
 
+    /// Whether to apply the reference's inferred colour to your photos.
+    ///
+    /// Off by default and deliberately so: an automatic grade applied to somebody else's
+    /// photographs reads as a bug rather than a style when it is wrong. But the analyser
+    /// measures it either way, so leaving it permanently discarded — which is what the code did
+    /// before — threw away work for no reason.
+    var matchReferenceLook = false
+
     /// Identity of the project being edited.
     ///
     /// Deliberately *not* derived from `timeline.id`. `RecipeBinder` generates that
@@ -168,7 +176,12 @@ final class AppModel {
             assets: assets,
             assignment: assignment,
             content: content,
-            options: RecipeBinder.Options(canvas: nil, respectBeatGrid: true, allowAssetReuse: true)
+            options: RecipeBinder.Options(
+                canvas: nil,
+                respectBeatGrid: true,
+                allowAssetReuse: true,
+                applyGrade: matchReferenceLook
+            )
         )
         if let document {
             document.replace(with: timeline)

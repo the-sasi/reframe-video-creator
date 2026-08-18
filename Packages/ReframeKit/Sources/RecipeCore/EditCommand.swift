@@ -21,6 +21,8 @@ public enum EditCommand: Codable, Sendable, Hashable {
     case setClipCrop(id: UUID, start: NormalizedRect, end: NormalizedRect,
                      wasStart: NormalizedRect, wasEnd: NormalizedRect)
     case setClipGrade(id: UUID, grade: ColorGrade, wasGrade: ColorGrade)
+    case setClipEffects(id: UUID, vignette: Double, grain: Double,
+                        wasVignette: Double, wasGrain: Double)
     case setClipVolume(id: UUID, volume: Double, wasVolume: Double)
     case setTransition(clipID: UUID, transition: Transition?, wasTransition: Transition?)
 
@@ -55,6 +57,7 @@ public enum EditCommand: Codable, Sendable, Hashable {
         case .setClipSpeed: return "Change Speed"
         case .setClipCrop: return "Adjust Framing"
         case .setClipGrade: return "Adjust Colour"
+        case .setClipEffects: return "Adjust Effects"
         case .setClipVolume: return "Change Volume"
         case .setTransition: return "Change Transition"
         case .addTextLayer: return "Add Text"
@@ -81,6 +84,7 @@ public enum EditCommand: Codable, Sendable, Hashable {
         case .trimClip(let id, _, _, _, _): return "trim:\(id)"
         case .setClipCrop(let id, _, _, _, _): return "crop:\(id)"
         case .setClipGrade(let id, _, _): return "grade:\(id)"
+        case .setClipEffects(let id, _, _, _, _): return "effects:\(id)"
         case .setClipVolume(let id, _, _): return "clipvol:\(id)"
         case .setClipSpeed(let id, _, _): return "speed:\(id)"
         case .setTextFrame(let id, _, _): return "textframe:\(id)"
@@ -112,6 +116,9 @@ public enum EditCommand: Codable, Sendable, Hashable {
             return .setClipCrop(id: id, start: s, end: e, wasStart: ws, wasEnd: we)
         case (.setClipGrade(let id, _, let wg), .setClipGrade(_, let g, _)):
             return .setClipGrade(id: id, grade: g, wasGrade: wg)
+        case (.setClipEffects(let id, _, _, let wv, let wgr),
+              .setClipEffects(_, let v, let gr, _, _)):
+            return .setClipEffects(id: id, vignette: v, grain: gr, wasVignette: wv, wasGrain: wgr)
         case (.setClipVolume(let id, _, let wv), .setClipVolume(_, let v, _)):
             return .setClipVolume(id: id, volume: v, wasVolume: wv)
         case (.setClipSpeed(let id, _, let ws), .setClipSpeed(_, let s, _)):
@@ -255,6 +262,11 @@ extension EditCommand {
         case .setClipGrade(let id, let grade, let wasGrade):
             let i = try clipIndex(id, in: t)
             t.clips[i].grade = reverting ? wasGrade : grade
+
+        case .setClipEffects(let id, let vignette, let grain, let wasVignette, let wasGrain):
+            let i = try clipIndex(id, in: t)
+            t.clips[i].vignette = reverting ? wasVignette : vignette
+            t.clips[i].grain = reverting ? wasGrain : grain
 
         case .setClipVolume(let id, let volume, let wasVolume):
             let i = try clipIndex(id, in: t)

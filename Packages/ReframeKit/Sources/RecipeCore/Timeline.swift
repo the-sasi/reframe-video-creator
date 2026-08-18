@@ -125,6 +125,10 @@ public struct VideoClip: Codable, Sendable, Hashable, Identifiable {
     public var speed: Double
     public var opacity: Double
     public var volume: Double
+    /// 0...1 corner darkening.
+    public var vignette: Double
+    /// 0...1 film grain.
+    public var grain: Double
 
     public init(
         id: UUID = UUID(),
@@ -140,7 +144,9 @@ public struct VideoClip: Codable, Sendable, Hashable, Identifiable {
         grade: ColorGrade = .neutral,
         speed: Double = 1.0,
         opacity: Double = 1.0,
-        volume: Double = 1.0
+        volume: Double = 1.0,
+        vignette: Double = 0,
+        grain: Double = 0
     ) {
         self.id = id
         self.assetID = assetID
@@ -156,6 +162,8 @@ public struct VideoClip: Codable, Sendable, Hashable, Identifiable {
         self.speed = speed
         self.opacity = opacity
         self.volume = volume
+        self.vignette = vignette
+        self.grain = grain
     }
 
     public var end: Double { start + duration }

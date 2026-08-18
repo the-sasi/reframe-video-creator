@@ -20,6 +20,8 @@ struct LayerUniforms {
     float4 sourceCrop;
     // exposure, contrast, saturation, temperature
     float4 grade;
+    // vignette, grain, time, unused
+    float4 effects;
     float  opacity;
     float  rotation;
     float  scale;
@@ -54,6 +56,37 @@ static inline float3 applyGrade(float3 color, float4 grade) {
     // than a red cast.
     color.r += grade.w * 0.06;
     color.b -= grade.w * 0.06;
+    return clamp(color, 0.0, 1.0);
+}
+
+// Cheap hash noise. Fed the frame time so grain moves between frames — a static pattern reads
+// as a dirty lens rather than as film.
+static inline float hashNoise(float2 uv, float time) {
+    float3 p = float3(uv, time);
+    p = fract(p * 0.1031);
+    p += dot(p, p.yzx + 33.33);
+    return fract((p.x + p.y) * p.z);
+}
+
+// effects = (vignette, grain, time, unused)
+static inline float3 applyEffects(float3 color, float2 uv, float4 effects) {
+    if (effects.x > 0.001) {
+        // Distance from centre, aspect-agnostic. smoothstep keeps the falloff soft enough
+        // that it reads as lighting rather than as a drawn oval.
+        float2 offset = uv - 0.5;
+        float d = length(offset) * 1.4142;
+        float darkening = smoothstep(0.35, 1.0, d) * effects.x;
+        color *= (1.0 - darkening);
+    }
+
+    if (effects.y > 0.001) {
+        float n = hashNoise(uv * 512.0, effects.z);
+        // Signed, and scaled down in the shadows where real grain is least visible.
+        float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
+        float strength = effects.y * 0.12 * mix(0.4, 1.0, luminance);
+        color += (n - 0.5) * strength;
+    }
+
     return clamp(color, 0.0, 1.0);
 }
 
@@ -100,6 +133,10 @@ fragment float4 layer_fragment(
 ) {
     float4 color = source.sample(textureSampler, in.uv);
     color.rgb = applyGrade(color.rgb, uniforms.grade);
+    // Effects use the *destination* position, not the source crop — a vignette belongs to the
+    // frame, not to whatever region of the photo happens to be showing through it.
+    float2 framePosition = (in.uv - uniforms.sourceCrop.xy) / max(uniforms.sourceCrop.zw, 1e-5);
+    color.rgb = applyEffects(color.rgb, framePosition, uniforms.effects);
     color *= uniforms.opacity;   // premultiplied: scale rgb and a together
     return color;
 }

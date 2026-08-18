@@ -70,6 +70,11 @@ public struct RenderPlan: Sendable, Hashable {
         public var rotation: Double
         /// Uniform scale about the destination centre, for pop-in animation.
         public var scale: Double
+        /// 0...1 corner darkening.
+        public var vignette: Double
+        /// 0...1 film grain. Animated from `RenderPlan.time`, so it moves rather than sitting
+        /// as a fixed pattern — a static grain layer reads as a dirty lens.
+        public var grain: Double
 
         public init(
             content: Content,
@@ -78,7 +83,9 @@ public struct RenderPlan: Sendable, Hashable {
             opacity: Double = 1,
             grade: ColorGrade = .neutral,
             rotation: Double = 0,
-            scale: Double = 1
+            scale: Double = 1,
+            vignette: Double = 0,
+            grain: Double = 0
         ) {
             self.content = content
             self.sourceCrop = sourceCrop
@@ -87,6 +94,8 @@ public struct RenderPlan: Sendable, Hashable {
             self.grade = grade
             self.rotation = rotation
             self.scale = scale
+            self.vignette = vignette
+            self.grain = grain
         }
 
         public enum Content: Sendable, Hashable {

@@ -19,6 +19,7 @@ struct ContentImportView: View {
     @State private var isLoading = false
     @State private var isPreparing = false
     @State private var isImportingMusic = false
+    @State private var showsReorder = false
     @State private var authorization: PHAuthorizationStatus = .notDetermined
     @State private var lastImportNote: String?
 
@@ -69,6 +70,9 @@ struct ContentImportView: View {
         .onChange(of: logoItem) { _, item in
             guard let item else { return }
             Task { await loadLogo(item) }
+        }
+        .sheet(isPresented: $showsReorder) {
+            ReorderSheet()
         }
     }
 
@@ -258,8 +262,63 @@ struct ContentImportView: View {
     // MARK: - Extras
 
     private var extrasSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
+        @Bindable var model = model
+
+        return VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text("Optional").font(Theme.Font.sectionTitle)
+
+            if let palette = model.recipe?.palette, !palette.dominant.isEmpty {
+                Toggle(isOn: $model.matchReferenceLook) {
+                    HStack(spacing: Theme.Space.m) {
+                        HStack(spacing: -6) {
+                            ForEach(palette.dominant.prefix(3), id: \.self) { hex in
+                                Circle()
+                                    .fill(Color(hex: hex))
+                                    .frame(width: 22, height: 22)
+                                    .overlay { Circle().strokeBorder(.white.opacity(0.3), lineWidth: 1) }
+                            }
+                        }
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Match the reference's look")
+                                .font(Theme.Font.body)
+                            Text("Applies the colour tone from the original video to your photos.")
+                                .font(Theme.Font.caption)
+                                .foregroundStyle(Theme.Palette.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .tint(Theme.Palette.accent)
+                .padding(Theme.Space.m)
+                .cardSurface()
+            }
+
+            if model.assets.visuals.count > 1 {
+                Button {
+                    showsReorder = true
+                } label: {
+                    HStack(spacing: Theme.Space.m) {
+                        Image(systemName: "arrow.up.arrow.down")
+                            .foregroundStyle(Theme.Palette.accent)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Reorder")
+                                .font(Theme.Font.body)
+                                .foregroundStyle(Theme.Palette.primaryText)
+                            Text("Auto Arrange picks the best fit, but order still matters")
+                                .font(Theme.Font.caption)
+                                .foregroundStyle(Theme.Palette.secondaryText)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.tertiaryText)
+                    }
+                    .padding(Theme.Space.m)
+                    .cardSurface()
+                }
+                .buttonStyle(.plain)
+            }
 
             PhotosPicker(
                 selection: $logoItem,

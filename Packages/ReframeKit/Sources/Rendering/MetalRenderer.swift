@@ -9,6 +9,8 @@ struct LayerUniforms {
     var destination: SIMD4<Float>
     var sourceCrop: SIMD4<Float>
     var grade: SIMD4<Float>
+    /// vignette, grain, time, unused
+    var effects: SIMD4<Float>
     var opacity: Float
     var rotation: Float
     var scale: Float
@@ -280,7 +282,8 @@ public final class MetalRenderer: @unchecked Sendable {
                 draw(
                     texture: texture, layer: layer, pipeline: layerPipeline,
                     sourceCrop: layer.sourceCrop, destination: layer.destination,
-                    opacity: layer.opacity, scale: layer.scale, encoder: encoder
+                    opacity: layer.opacity, scale: layer.scale,
+                    time: plan.time, encoder: encoder
                 )
 
             case .placeholder:
@@ -328,6 +331,7 @@ public final class MetalRenderer: @unchecked Sendable {
         destination: NormalizedRect,
         opacity: Double,
         scale: Double,
+        time: Double = 0,
         encoder: MTLRenderCommandEncoder
     ) {
         encoder.setRenderPipelineState(pipeline)
@@ -345,6 +349,9 @@ public final class MetalRenderer: @unchecked Sendable {
             grade: SIMD4<Float>(
                 Float(layer.grade.exposure), Float(layer.grade.contrast),
                 Float(layer.grade.saturation), Float(layer.grade.temperature)
+            ),
+            effects: SIMD4<Float>(
+                Float(layer.vignette), Float(layer.grain), Float(time), 0
             ),
             opacity: Float(opacity),
             rotation: Float(layer.rotation),

@@ -119,7 +119,9 @@ public struct RenderPlanner: Sendable {
                 sourceCrop: clip.crop(atLocalTime: localTime),
                 destination: .full,
                 opacity: clip.opacity,
-                grade: clip.grade
+                grade: clip.grade,
+                vignette: clip.vignette,
+                grain: clip.grain
             )
         ]
     }
