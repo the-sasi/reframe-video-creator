@@ -1,13 +1,16 @@
+import CoreGraphics
+import ImageIO
 import Observation
 import Photos
 import ReframeKit
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// App-wide state and service wiring.
 ///
 /// Holds the in-flight project — recipe, assets, words, assignment — because the primary flow
-/// spans six screens and the work-in-progress belongs to the flow rather than to any one of
+/// spans several screens and the work-in-progress belongs to the flow rather than to any one of
 /// them. The editable document itself lives in `TimelineDocument`, which owns the undo stack.
 @MainActor
 @Observable
@@ -41,32 +44,49 @@ final class AppModel {
     /// Whether to apply the reference's inferred colour to your photos.
     ///
     /// Off by default and deliberately so: an automatic grade applied to somebody else's
-    /// photographs reads as a bug rather than a style when it is wrong. But the analyser
-    /// measures it either way, so leaving it permanently discarded — which is what the code did
-    /// before — threw away work for no reason.
+    /// photographs reads as a bug rather than a style when it is wrong.
     var matchReferenceLook = false
+
+    /// The reference file, kept only for the length of the flow so its soundtrack can be
+    /// extracted *if the user asks*. Cleared when the flow ends. Analysis never reads it again.
+    var referenceURL: URL?
 
     /// Identity of the project being edited.
     ///
     /// Deliberately *not* derived from `timeline.id`. `RecipeBinder` generates that
     /// deterministically from the reference's fingerprint, so two projects made from the same
-    /// reference would collide and the second would silently overwrite the first. Determinism
-    /// is right for recipe content and wrong for project identity.
+    /// reference would collide and the second would silently overwrite the first.
     var currentProjectID = UUID()
     var projectTitle: String?
     var projectCreatedAt: Date?
     var projectIsFavorite = false
     var projectThumbnailPath: String?
 
-    /// Recent projects for the Continue strip.
+    /// Recent projects for the home screen.
     var recentProjects: [ProjectSummary] = []
     var savedRecipes: [EditRecipe] = []
 
+    /// A project that was open when the app last stopped without a clean save.
+    var recoveryCandidate: ProjectSummary?
+
     struct ProjectSummary: Identifiable, Hashable {
         let id: UUID
-        let title: String
+        var title: String
+        let createdAt: Date
         let modifiedAt: Date
         let sceneCount: Int
+        let duration: Double
+        var isFavorite: Bool
+        let thumbnailURL: URL?
+        let canvasAspect: Double
+    }
+
+    private var autosaveTask: Task<Void, Never>?
+    private var pendingThumbnail: CGImage?
+
+    private enum Defaults {
+        static let openProjectID = "reframe.openProjectID"
+        static let cleanExit = "reframe.cleanExit"
     }
 
     init() {
@@ -88,6 +108,20 @@ final class AppModel {
         path.append(.referenceImport)
     }
 
+    func startFromScratch() {
+        resetFlow()
+        path.append(.contentImport)
+    }
+
+    /// Begins a project from a saved or built-in style.
+    func startFromTemplate(_ recipe: EditRecipe) {
+        resetFlow()
+        self.recipe = recipe
+        // Starters carry no reference text worth reproducing; analysed recipes do.
+        fidelity = .closeMatch
+        path.append(.contentImport)
+    }
+
     func resetFlow() {
         recipe = nil
         assets = AssetPool()
@@ -101,43 +135,55 @@ final class AppModel {
         projectIsFavorite = false
         projectThumbnailPath = nil
         fidelity = .closeMatch
+        matchReferenceLook = false
+        referenceURL = nil
+        autosaveTask?.cancel()
     }
 
     /// Builds a timeline with no recipe — the "Start From Scratch" path.
     ///
-    /// Previously this route navigated to the content screen and then dead-ended, because both
-    /// `autoArrange()` and `bindTimeline()` bail out when `recipe` is nil. A default structure
-    /// is a better answer than a broken menu item: even spacing, alternating gentle moves, hard
-    /// cuts. Everything is editable afterwards, which is the point of starting from scratch.
+    /// A default structure is a better answer than a blank canvas: even spacing, alternating
+    /// gentle moves, hard cuts. Everything is editable afterwards, which is the point of
+    /// starting from scratch.
     func buildScratchTimeline(secondsPerClip: Double = 2.0) {
         let canvas = CanvasSpec.reel1080
         var timeline = Timeline(id: UUID(), canvas: canvas, recipeID: nil)
 
         timeline.clips = assets.visuals.enumerated().map { index, asset in
-            // Alternate push-in and pull-out so a run of stills does not read as a slideshow.
             let pushesIn = index.isMultiple(of: 2)
             let tight = NormalizedRect.full.scaled(by: 0.88)
+            let isVideo = asset.kind == .video
             return VideoClip(
                 assetID: asset.id,
                 slotID: "scratch_\(index + 1)",
                 start: Double(index) * secondsPerClip,
-                duration: secondsPerClip,
+                duration: isVideo && asset.duration > 0 ? min(asset.duration, secondsPerClip * 2) : secondsPerClip,
                 cropStart: pushesIn ? .full : tight,
                 cropEnd: pushesIn ? tight : .full,
                 easing: .easeInOut,
                 transitionIn: index == 0 ? nil : Transition(kind: .cut, duration: 0),
-                volume: 0
+                volume: isVideo ? content.clipAudioVolume : 0
             )
         }
         timeline.relayout()
 
+        // Music and voice, if the content screen collected them.
         if let musicID = content.musicAssetID {
-            timeline.audio = [
+            let trackDuration = assets[musicID]?.duration ?? timeline.duration
+            timeline.audio.append(
                 AudioClip(
-                    assetID: musicID, start: 0, duration: timeline.duration,
-                    fadeIn: 0.15, fadeOut: min(0.8, timeline.duration * 0.1)
+                    assetID: musicID, start: 0,
+                    duration: min(timeline.duration, trackDuration > 0 ? trackDuration : timeline.duration),
+                    fadeIn: 0.15, fadeOut: min(0.8, timeline.duration * 0.1), role: .music
                 )
-            ]
+            )
+        }
+        if let voiceID = content.voiceoverAssetID {
+            let trackDuration = assets[voiceID]?.duration ?? timeline.duration
+            timeline.audio.append(
+                AudioClip(assetID: voiceID, start: 0, duration: min(timeline.duration, trackDuration),
+                          fadeIn: 0.02, fadeOut: 0.05, role: .voice)
+            )
         }
 
         document = TimelineDocument(timeline: timeline)
@@ -156,20 +202,11 @@ final class AppModel {
     /// Extracts Vision features for anything new, then solves the assignment.
     ///
     /// Feature extraction is the expensive half and it is per-asset, so it is cached across
-    /// re-arranges — tapping Shuffle re-solves in milliseconds instead of re-running Vision.
+    /// re-arranges and persisted with the project — tapping Shuffle re-solves in milliseconds
+    /// instead of re-running Vision.
     func autoArrange(shuffleSeed: Int = 0) async {
         guard let recipe else { return }
-
-        let missing = assets.visuals.filter { assetFeatures[$0.id] == nil }
-        if !missing.isEmpty {
-            let extractor = AssetFeatureExtractor(resolver: resolver)
-            for reference in missing {
-                if let features = await extractor.extract(from: reference) {
-                    assetFeatures[reference.id] = features
-                }
-            }
-        }
-
+        await extractMissingFeatures()
         assignment = AssetMapper().map(
             recipe: recipe,
             assets: assets,
@@ -177,6 +214,17 @@ final class AppModel {
             shuffleSeed: shuffleSeed,
             locked: assignment
         )
+    }
+
+    func extractMissingFeatures() async {
+        let missing = assets.visuals.filter { assetFeatures[$0.id] == nil }
+        guard !missing.isEmpty else { return }
+        let extractor = AssetFeatureExtractor(resolver: resolver)
+        for reference in missing {
+            if let features = await extractor.extract(from: reference) {
+                assetFeatures[reference.id] = features
+            }
+        }
     }
 
     /// Pins or unpins a slot. Pinned slots survive Auto Arrange and Shuffle untouched.
@@ -219,11 +267,63 @@ final class AppModel {
         exportSettings = ExportSettings.matching(canvas: timeline.canvas, shortSide: 1080)
     }
 
+    /// The whole "make it" step: bind, save, open the editor. Replaces the old generate screen,
+    /// which animated six stages for work that takes a few milliseconds.
+    func createVideoAndEdit() async {
+        if recipe != nil {
+            bindTimeline()
+        } else {
+            buildScratchTimeline()
+        }
+        guard document != nil else {
+            present(.renderSetupFailed(detail: "binder produced no timeline"))
+            return
+        }
+        await saveProject()
+        Haptics.success()
+        path.append(.editor)
+    }
+
+    // MARK: - Reference audio
+
+    /// Pulls the reference's soundtrack into the pool. Only ever runs on an explicit tap.
+    func extractReferenceAudio() async -> AssetReference? {
+        guard let referenceURL else {
+            present(.audioExtractionFailed(detail: "reference no longer available"))
+            return nil
+        }
+        if let existing = content.referenceAudioAssetID, let asset = assets[existing] { return asset }
+        do {
+            let name = recipe?.title ?? "Reference"
+            let (relative, duration) = try await AudioExtractor.extract(from: referenceURL, displayName: name)
+            let reference = AssetReference(
+                kind: .audio, origin: .sandboxRelativePath(relative),
+                displayName: "\(name) — audio", pixelWidth: 0, pixelHeight: 0, duration: duration
+            )
+            assets.add(reference)
+            return reference
+        } catch let error as ReframeError {
+            present(error)
+        } catch {
+            present(.audioExtractionFailed(detail: "\(error)"))
+        }
+        return nil
+    }
+
     // MARK: - Persistence
 
     /// Saves whether or not a recipe is involved — a scratch project is still a project.
-    func saveProject() async {
+    func saveProject(thumbnail: CGImage? = nil) async {
         guard let document else { return }
+        if let thumbnail { pendingThumbnail = thumbnail }
+
+        if let image = pendingThumbnail, let png = Self.pngData(image) {
+            if let name = try? await projectStore.saveThumbnail(png, projectID: currentProjectID) {
+                projectThumbnailPath = name
+            }
+            pendingThumbnail = nil
+        }
+
         let project = Project(
             id: currentProjectID,
             title: projectTitle ?? recipe?.title ?? "Untitled",
@@ -239,13 +339,33 @@ final class AppModel {
             isFavorite: projectIsFavorite,
             thumbnailPath: projectThumbnailPath
         )
+        if projectCreatedAt == nil { projectCreatedAt = project.createdAt }
         do {
             try await projectStore.save(project, history: document.history)
-            if let recipe { try await projectStore.save(recipe: recipe) }
+            if let recipe, recipe.isBuiltIn != true { try await projectStore.save(recipe: recipe) }
+            markCleanExit(true)
             await refreshLibrary()
         } catch {
             present(.documentCorrupt(detail: "\(error)"))
         }
+    }
+
+    /// Called after every meaningful edit. Coalesces bursts into one write about a second and
+    /// a half after the last change — a slider drag does not hit the disk 60 times.
+    func noteEdit() {
+        markCleanExit(false)
+        autosaveTask?.cancel()
+        autosaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled, let self else { return }
+            await self.saveProject()
+        }
+    }
+
+    /// Immediate save — app going to background, editor closing.
+    func flushAutosave() async {
+        autosaveTask?.cancel()
+        await saveProject()
     }
 
     func openProject(id: UUID) async {
@@ -262,11 +382,13 @@ final class AppModel {
             assetFeatures = project.assetFeatures
             fidelity = project.fidelity
             exportSettings = project.exportSettings
+            referenceURL = nil
 
             // A project can outlive its recipe — the user may have deleted the style. That is
             // survivable: the timeline is self-contained, and only "re-arrange" needs the recipe.
             if let recipeID = project.recipeID {
-                recipe = try? await projectStore.loadRecipe(id: recipeID)
+                recipe = (try? await projectStore.loadRecipe(id: recipeID))
+                    ?? StarterTemplates.all.first { $0.id == recipeID }
             } else {
                 recipe = nil
             }
@@ -276,6 +398,8 @@ final class AppModel {
                 document.restore(history: history)
             }
             self.document = document
+            recoveryCandidate = nil
+            UserDefaults.standard.set(id.uuidString, forKey: Defaults.openProjectID)
             path = [.editor]
         } catch let error as ReframeError {
             present(error)
@@ -290,12 +414,20 @@ final class AppModel {
             var summaries: [ProjectSummary] = []
             for id in ids {
                 guard let project = try? await projectStore.load(id: id) else { continue }
+                let thumbnail = await project.thumbnailPath.map { name in
+                    await projectStore.thumbnailURL(projectID: id, name: name)
+                }
                 summaries.append(
                     ProjectSummary(
                         id: project.id,
                         title: project.title,
+                        createdAt: project.createdAt,
                         modifiedAt: project.modifiedAt,
-                        sceneCount: project.timeline.clips.count
+                        sceneCount: project.timeline.clips.count,
+                        duration: project.timeline.duration,
+                        isFavorite: project.isFavorite,
+                        thumbnailURL: thumbnail,
+                        canvasAspect: project.timeline.canvas.aspectRatio
                     )
                 )
             }
@@ -306,9 +438,160 @@ final class AppModel {
         }
     }
 
+    /// Saved styles first (newest first), then the built-in starters.
+    var templates: [EditRecipe] {
+        savedRecipes + StarterTemplates.all
+    }
+
+    // MARK: - Project operations
+
     func deleteProject(id: UUID) async {
         try? await projectStore.delete(id: id)
+        if id == currentProjectID { document = nil }
         await refreshLibrary()
+    }
+
+    func renameProject(id: UUID, to title: String) async {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if id == currentProjectID {
+            projectTitle = trimmed
+            if document != nil { await saveProject(); return }
+        }
+        guard var project = try? await projectStore.load(id: id) else { return }
+        project.title = trimmed
+        try? await projectStore.save(project)
+        await refreshLibrary()
+    }
+
+    func toggleFavorite(id: UUID) async {
+        if id == currentProjectID {
+            projectIsFavorite.toggle()
+            if document != nil { await saveProject(); return }
+        }
+        guard var project = try? await projectStore.load(id: id) else { return }
+        project.isFavorite.toggle()
+        try? await projectStore.save(project)
+        await refreshLibrary()
+    }
+
+    func duplicateProject(id: UUID) async {
+        _ = try? await projectStore.duplicate(id: id)
+        await refreshLibrary()
+    }
+
+    // MARK: - Templates
+
+    func deleteRecipe(id: UUID) async {
+        try? await projectStore.deleteRecipe(id: id)
+        await refreshLibrary()
+    }
+
+    func renameRecipe(id: UUID, to title: String) async {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, var recipe = try? await projectStore.loadRecipe(id: id) else { return }
+        recipe.title = trimmed
+        try? await projectStore.save(recipe: recipe)
+        if self.recipe?.id == id { self.recipe?.title = trimmed }
+        await refreshLibrary()
+    }
+
+    func duplicateRecipe(_ recipe: EditRecipe) async {
+        var copy = recipe
+        copy.id = UUID()
+        copy.title = recipe.title.hasSuffix(" copy") ? recipe.title : "\(recipe.title) copy"
+        copy.createdAt = Date()
+        copy.isBuiltIn = false
+        try? await projectStore.save(recipe: copy)
+        await refreshLibrary()
+    }
+
+    /// The current recipe saved as a reusable style (a starter becomes "yours" on save).
+    func saveCurrentAsTemplate(title: String) async {
+        guard var recipe else { return }
+        if recipe.isBuiltIn == true {
+            recipe.id = UUID()
+            recipe.isBuiltIn = false
+        }
+        recipe.title = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? recipe.title : title
+        recipe.createdAt = Date()
+        try? await projectStore.save(recipe: recipe)
+        self.recipe = recipe
+        await refreshLibrary()
+    }
+
+    func exportRecipeFile(_ recipe: EditRecipe) async -> URL? {
+        try? await projectStore.exportRecipe(recipe)
+    }
+
+    func importRecipeFile(_ url: URL) async {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let recipe = try await projectStore.importRecipe(from: url)
+            await refreshLibrary()
+            DiagnosticsLog.shared.info("templates", "imported style \(recipe.title)")
+            Haptics.success()
+        } catch let error as ReframeError {
+            present(error)
+        } catch {
+            present(.documentCorrupt(detail: "\(error)"))
+        }
+    }
+
+    // MARK: - Opening files from other apps
+
+    /// "Share -> Reframe" and "Open in Reframe" arrive here. Videos become a reference; a
+    /// `.reframestyle` file becomes a saved style. Anything else is explained, not swallowed.
+    func handleIncomingURL(_ url: URL) {
+        let ext = url.pathExtension.lowercased()
+        if ext == "reframestyle" || ext == "json" {
+            Task { await importRecipeFile(url) }
+            return
+        }
+        guard let type = UTType(filenameExtension: ext), type.conforms(to: .movie) || type.conforms(to: .video) else {
+            present(.sharedURLNotAFile(host: url.host))
+            return
+        }
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("reference-\(UUID().uuidString).\(ext)")
+        do {
+            try FileManager.default.copyItem(at: url, to: destination)
+            resetFlow()
+            path = [.referenceImport, .analysis(destination)]
+        } catch {
+            present(.fileAccessDenied(name: url.lastPathComponent))
+        }
+    }
+
+    // MARK: - Recovery
+
+    /// On launch: was a project open when the app last stopped, without a clean save?
+    func checkForRecovery() async {
+        guard let idString = UserDefaults.standard.string(forKey: Defaults.openProjectID),
+              let id = UUID(uuidString: idString),
+              UserDefaults.standard.object(forKey: Defaults.cleanExit) != nil,
+              UserDefaults.standard.bool(forKey: Defaults.cleanExit) == false else { return }
+        await refreshLibrary()
+        recoveryCandidate = recentProjects.first { $0.id == id }
+        if recoveryCandidate == nil { clearRecoveryMarker() }
+    }
+
+    func markEditorOpen() {
+        UserDefaults.standard.set(currentProjectID.uuidString, forKey: Defaults.openProjectID)
+        markCleanExit(true)
+    }
+
+    private func markCleanExit(_ clean: Bool) {
+        UserDefaults.standard.set(clean, forKey: Defaults.cleanExit)
+    }
+
+    func clearRecoveryMarker() {
+        UserDefaults.standard.removeObject(forKey: Defaults.openProjectID)
+        UserDefaults.standard.set(true, forKey: Defaults.cleanExit)
+        recoveryCandidate = nil
     }
 
     // MARK: - Errors
@@ -326,25 +609,21 @@ final class AppModel {
     func recover(from action: ReframeError.RecoveryAction) {
         presentedError = nil
         switch action {
-        case .openSettings:
+        case .openSettings, .manageStorage:
             if let url = URL(string: UIApplication.openSettingsURLString) {
                 UIApplication.shared.open(url)
             }
         case .retryAtLowerQuality:
-            exportSettings = .hd720
+            let canvas = document?.timeline.canvas ?? .reel1080
+            exportSettings = ExportSettings.matching(canvas: canvas, shortSide: 720, preferHEVC: exportSettings.preferHEVC)
             if path.last != .export { path.append(.export) }
         case .chooseDifferentFile:
             path = [.referenceImport]
         case .addMoreAssets:
             if path.last != .contentImport { path.append(.contentImport) }
-        case .manageStorage:
-            if let url = URL(string: UIApplication.openSettingsURLString) {
-                UIApplication.shared.open(url)
-            }
         case .retry:
-            // Was a no-op, so "Try Again" did nothing at all. There is no generic retry —
-            // what to retry depends on where you are — so send the user back one step, which
-            // is the screen the failed action was started from.
+            // There is no generic retry — what to retry depends on where you are — so send the
+            // user back one step, which is the screen the failed action was started from.
             if path.count > 1 { path.removeLast() }
         case .dismiss, .showScreenRecordingHelp, .waitForCooldown:
             break
@@ -357,5 +636,17 @@ final class AppModel {
         PerformanceLog.warn("memory warning at \(PerformanceLog.memoryFootprintMB()) MB")
         renderer?.evictCaches()
         Task { await resolver.evictCache() }
+    }
+
+    // MARK: - Helpers
+
+    private static func pngData(_ image: CGImage) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
+            return nil
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
     }
 }

@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	Merged with the keys Xcode generates (GENERATE_INFOPLIST_FILE=YES + INFOPLIST_KEY_* build
+	settings). Only what the build settings cannot express lives here: document types, so
+	"Share -> Reframe" works for video files and saved styles; and the two usage strings the
+	INFOPLIST_KEY_ form does not cover on this toolchain.
+	-->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Reframe uses the microphone only when you record a voiceover. Recordings stay on this iPhone.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Reframe transcribes speech on this iPhone to make captions. Nothing is sent anywhere.</string>
+
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Video</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.movie</string>
+				<string>public.video</string>
+				<string>com.apple.quicktime-movie</string>
+				<string>public.mpeg-4</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Reframe Style</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>app.reframe.style</string>
+			</array>
+		</dict>
+	</array>
+
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>app.reframe.style</string>
+			<key>UTTypeDescription</key>
+			<string>Reframe Style</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.json</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>reframestyle</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/vnd.reframe.style+json</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+
+	<!-- Documents are copied into the sandbox on open rather than edited in place. -->
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<false/>
+</dict>
+</plist>

@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import MediaIO
 import RecipeCore
 
 #if canImport(Speech)
@@ -66,9 +67,11 @@ public enum CaptionTranscriber {
     ) async throws {
         #if canImport(Speech)
         if #available(iOS 26.0, macOS 26.0, *) {
-            let transcriber = SpeechTranscriber(locale: locale, preset: .offlineTranscription)
+            let transcriber = SpeechTranscriber(
+                locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange]
+            )
             if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-                let observation = request.progress.observe(\.fractionCompleted) { p, _ in
+                let observation = request.progress.observe(\Progress.fractionCompleted, options: [.new]) { p, _ in
                     progress?(p.fractionCompleted)
                 }
                 defer { observation.invalidate() }

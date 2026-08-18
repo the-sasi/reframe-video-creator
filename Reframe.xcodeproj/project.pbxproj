@@ -202,6 +202,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Reframe/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Reframe;
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Reframe saves your finished video to Photos. Nothing is uploaded.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Reframe reads the photos and videos you choose. Everything stays on this iPhone — nothing is uploaded.";
@@ -234,6 +235,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Reframe/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Reframe;
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Reframe saves your finished video to Photos. Nothing is uploaded.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Reframe reads the photos and videos you choose. Everything stays on this iPhone — nothing is uploaded.";
