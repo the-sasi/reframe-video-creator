@@ -7,6 +7,7 @@ import SwiftUI
 /// framing were all locked at bind time despite the commands for them existing and being
 /// covered by tests. Everything routes through `EditCommand`, so it all undoes.
 struct StyleSheet: View {
+    @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
     let document: TimelineDocument
@@ -170,14 +171,25 @@ struct StyleSheet: View {
 
     private func motionSection(_ clip: VideoClip) -> some View {
         Section {
-            slider(
-                "Speed", value: clip.speed, range: 0.25...4,
-                format: { String(format: "%.2fx", $0) }
-            ) { newValue in
-                perform(from: clip) { target in
-                    .setClipSpeed(id: target.id, speed: newValue, wasSpeed: target.speed)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Fit")
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.Palette.secondaryText)
+                HStack(spacing: Theme.Space.s) {
+                    ForEach(FitMode.allCases, id: \.self) { mode in
+                        Chip(title: mode.displayName, systemImage: mode == .fill ? "rectangle.fill" : "rectangle.inset.filled", isSelected: clip.fitMode == mode) {
+                            perform(from: clip) { target in
+                                .setClipFit(id: target.id, fitMode: mode, wasFitMode: target.fitMode)
+                            }
+                            Haptics.snap()
+                        }
+                    }
+                    Chip(title: "Smart crop", systemImage: "person.crop.rectangle") {
+                        smartCrop(from: clip)
+                    }
                 }
             }
+            .padding(.vertical, 2)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Movement")
@@ -197,10 +209,28 @@ struct StyleSheet: View {
             }
             .padding(.vertical, 2)
         } header: {
-            Text("Motion")
+            Text("Framing")
         } footer: {
-            Text("Speed affects video clips. Movement is the slow drift applied to stills.")
+            Text("Fill crops to the canvas; Fit shows the whole picture with bars. Smart crop re-centres the crop on the subject Reframe found in the photo. Movement is the slow drift applied to stills.")
         }
+    }
+
+    /// Re-solves the crop window around the asset's detected subject, keeping the current zoom.
+    private func smartCrop(from clip: VideoClip) {
+        let targets = applyToAll ? document.timeline.clips : [clip]
+        let subjects = model.subjectRects
+        for target in targets {
+            guard let assetID = target.assetID, let asset = model.assets[assetID] else { continue }
+            let window = RecipeBinder.fillWindow(
+                sourceAspect: asset.aspectRatio, targetAspect: document.timeline.canvas.aspectRatio,
+                subject: subjects[assetID], referenceSubject: nil,
+                framing: Confident(.medium, confidence: 0, basis: "manual")
+            )
+            let zoom = target.cropEnd.width / max(0.01, target.cropStart.width)
+            let end = zoom < 1 ? window.scaled(by: max(0.62, zoom)).clampedInsideUnitSquare() : window
+            document.perform(.setClipCrop(id: target.id, start: window, end: end, wasStart: target.cropStart, wasEnd: target.cropEnd))
+        }
+        Haptics.snap()
     }
 
     private func audioSection(_ clip: VideoClip) -> some View {

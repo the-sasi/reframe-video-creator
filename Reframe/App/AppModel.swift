@@ -414,8 +414,9 @@ final class AppModel {
             var summaries: [ProjectSummary] = []
             for id in ids {
                 guard let project = try? await projectStore.load(id: id) else { continue }
-                let thumbnail = await project.thumbnailPath.map { name in
-                    await projectStore.thumbnailURL(projectID: id, name: name)
+                var thumbnail: URL?
+                if let name = project.thumbnailPath {
+                    thumbnail = await projectStore.thumbnailURL(projectID: id, name: name)
                 }
                 summaries.append(
                     ProjectSummary(

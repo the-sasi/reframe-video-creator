@@ -21,7 +21,8 @@ struct ReorderSheet: View {
                 Section {
                     ForEach(model.assets.visuals) { asset in
                         HStack(spacing: Theme.Space.m) {
-                            ReorderThumbnail(asset: asset)
+                            AssetThumbnailView(asset: asset, size: CGSize(width: 44, height: 58))
+                                .frame(width: 44, height: 58)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(asset.displayName)
                                     .font(Theme.Font.callout)
@@ -79,48 +80,6 @@ struct ReorderSheet: View {
             let asset = visuals[index]
             model.assets.remove(id: asset.id)
             model.assetFeatures.removeValue(forKey: asset.id)
-        }
-    }
-}
-
-private struct ReorderThumbnail: View {
-    let asset: AssetReference
-    @State private var image: UIImage?
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous)
-            .fill(Theme.Palette.surfaceRaised)
-            .frame(width: 44, height: 58)
-            .overlay {
-                if let image {
-                    Image(uiImage: image).resizable().scaledToFill()
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
-            .task { await load() }
-    }
-
-    private func load() async {
-        guard image == nil, case .photoLibrary(let identifier) = asset.origin else { return }
-        guard let phAsset = PHAsset.fetchAssets(
-            withLocalIdentifiers: [identifier], options: nil
-        ).firstObject else { return }
-
-        let options = PHImageRequestOptions()
-        options.isNetworkAccessAllowed = true
-        options.resizeMode = .fast
-
-        image = await withCheckedContinuation { continuation in
-            var resumed = false
-            PHImageManager.default().requestImage(
-                for: phAsset, targetSize: CGSize(width: 120, height: 160),
-                contentMode: .aspectFill, options: options
-            ) { result, info in
-                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-                guard !isDegraded, !resumed else { return }
-                resumed = true
-                continuation.resume(returning: result)
-            }
         }
     }
 }

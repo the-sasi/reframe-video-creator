@@ -1,7 +1,8 @@
 import ReframeKit
 import SwiftUI
 
-/// "Here's what I found" — and one button.
+/// "Reference understood" — and the two decisions that follow from it: how closely to follow
+/// the reference, and what to do about its soundtrack.
 ///
 /// Everything the analyser was unsure about carries a Guessed badge that explains itself. That
 /// is the difference between an app that feels honest and one that feels like a magic trick you
@@ -9,6 +10,8 @@ import SwiftUI
 struct RecipeSummaryView: View {
     @Environment(AppModel.self) private var model
     @State private var expandedSceneID: String?
+    @State private var isExtracting = false
+    @State private var extractedForShare: URL?
 
     var body: some View {
         if let recipe = model.recipe {
@@ -25,21 +28,15 @@ struct RecipeSummaryView: View {
     }
 
     private func content(_ recipe: EditRecipe) -> some View {
-        ScrollView {
+        @Bindable var model = model
+        return ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.l) {
-                headline(recipe)
-                metrics(recipe)
-
-                if let grid = recipe.beatGrid {
-                    beatSection(grid, recipe: recipe)
-                }
-
+                understood(recipe)
+                modeSection
+                if recipe.source.hasAudio { audioSection(recipe) }
+                if let grid = recipe.beatGrid { beatSection(grid, recipe: recipe) }
                 sceneList(recipe)
-
-                if !recipe.fillableTextSlots.isEmpty {
-                    textSlots(recipe)
-                }
-
+                if !recipe.fillableTextSlots.isEmpty { textSlots(recipe) }
                 confidenceNote(recipe)
             }
             .padding(Theme.Space.m)
@@ -48,49 +45,171 @@ struct RecipeSummaryView: View {
         .background(Theme.Palette.background)
         .navigationTitle("The style")
         .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .top) {
+            FlowProgress(step: 1, total: 4, title: "Choose how to use it")
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.vertical, Theme.Space.s)
+                .background(.bar)
+        }
         .safeAreaInset(edge: .bottom) {
-            PrimaryButton(title: "Use This Style", systemImage: "checkmark") {
+            PrimaryButton(title: model.fidelity.displayName, systemImage: "arrow.right") {
                 model.path.append(.contentImport)
             }
             .padding(Theme.Space.m)
             .background(.regularMaterial)
         }
+        .sheet(item: $extractedForShare) { url in
+            ShareSheet(items: [url])
+        }
     }
 
-    private func headline(_ recipe: EditRecipe) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+    // MARK: - Hero
+
+    private func understood(_ recipe: EditRecipe) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            HStack(spacing: Theme.Space.s) {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundStyle(Theme.Palette.success)
+                Text("REFERENCE UNDERSTOOD")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .tracking(1.2)
+                    .foregroundStyle(Theme.Palette.secondaryText)
+            }
             Text(recipe.stats.pacingDescription)
-                .font(Theme.Font.screenTitle)
-            Text("\(recipe.stats.sceneCount) slots to fill · \(recipe.source.aspect.displayName) · \(String(format: "%.1f", recipe.duration))s")
-                .font(Theme.Font.callout)
-                .foregroundStyle(Theme.Palette.secondaryText)
+                .font(Theme.Font.displayTitle)
+
+            let grid = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+            LazyVGrid(columns: grid, spacing: Theme.Space.s) {
+                Fact(value: String(format: "%.1fs", recipe.duration), label: "duration")
+                Fact(value: "\(recipe.stats.sceneCount)", label: recipe.stats.sceneCount == 1 ? "scene" : "scenes")
+                Fact(value: recipe.source.aspect.displayName, label: "format")
+                Fact(value: recipe.beatGrid.map { "\(Int($0.bpm.value.rounded()))" } ?? "—", label: "BPM")
+                Fact(value: "\(recipe.stats.textSlotCount)", label: "text layers")
+                Fact(value: "\(recipe.scenes.filter { $0.move.effectiveKind != .none }.count)", label: "camera moves")
+                Fact(value: "\(recipe.stats.transitionCount)", label: "transitions")
+                Fact(value: recipe.audio.hasSpeech.value ? "Yes" : "No", label: "speech")
+                Fact(value: "\(Int(recipe.source.fps.rounded()))", label: "fps")
+            }
+        }
+        .padding(Theme.Space.l)
+        .heroSurface()
+    }
+
+    private struct Fact: View {
+        let value: String
+        let label: String
+        var body: some View {
+            VStack(spacing: 2) {
+                Text(value)
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(label.uppercased())
+                    .font(Theme.Font.metricLabel)
+                    .tracking(0.6)
+                    .foregroundStyle(Theme.Palette.tertiaryText)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(Theme.Palette.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
     }
 
-    private func metrics(_ recipe: EditRecipe) -> some View {
-        HStack(spacing: 0) {
-            MetricTile(
-                value: "\(recipe.stats.sceneCount)",
-                label: "scenes", systemImage: "rectangle.stack"
-            )
-            Divider().frame(height: 34)
-            MetricTile(
-                value: "\(recipe.stats.transitionCount)",
-                label: "transitions", systemImage: "arrow.left.arrow.right"
-            )
-            Divider().frame(height: 34)
-            MetricTile(
-                value: "\(recipe.stats.textSlotCount)",
-                label: "text layers", systemImage: "textformat"
-            )
-            Divider().frame(height: 34)
-            MetricTile(
-                value: String(format: "%.1fs", recipe.stats.medianSceneDuration),
-                label: "median cut", systemImage: "scissors"
-            )
+    // MARK: - Mode
+
+    private var modeSection: some View {
+        @Bindable var model = model
+        return VStack(alignment: .leading, spacing: Theme.Space.s) {
+            SectionHeader("How closely to follow it", subtitle: "You can change anything afterwards in the editor.")
+            ForEach(BindingFidelity.allCases) { mode in
+                ChoiceCard(
+                    title: mode.displayName,
+                    detail: mode.summary,
+                    systemImage: icon(for: mode),
+                    isSelected: model.fidelity == mode,
+                    badge: mode == .closeMatch ? "RECOMMENDED" : nil
+                ) {
+                    withAnimation(Theme.Motion.quick) { model.fidelity = mode }
+                    Haptics.snap()
+                }
+            }
         }
-        .cardSurface()
     }
+
+    private func icon(for mode: BindingFidelity) -> String {
+        switch mode {
+        case .closeMatch: return "scope"
+        case .styleOnly: return "paintbrush.pointed"
+        case .structureOnly: return "rectangle.split.3x1"
+        }
+    }
+
+    // MARK: - Audio
+
+    private func audioSection(_ recipe: EditRecipe) -> some View {
+        @Bindable var model = model
+        let extracted = model.content.referenceAudioAssetID.flatMap { model.assets[$0] }
+        return VStack(alignment: .leading, spacing: Theme.Space.s) {
+            SectionHeader("Reference audio", subtitle: recipe.audio.hasSpeech.value
+                ? "This reference has speech. You can keep its soundtrack, add your own, or both."
+                : "This reference has music. Bring your own track, or keep the original.")
+
+            VStack(spacing: Theme.Space.s) {
+                ChoiceCard(
+                    title: "Use my own audio",
+                    detail: "Add music or record a voiceover on the next screen. Nothing from the reference is used.",
+                    systemImage: "music.note.list",
+                    isSelected: extracted == nil
+                ) {
+                    if let id = model.content.referenceAudioAssetID {
+                        model.content.referenceAudioAssetID = nil
+                        model.assets.remove(id: id)
+                    }
+                    Haptics.snap()
+                }
+                ChoiceCard(
+                    title: extracted == nil ? "Keep the reference's audio" : "Keeping the reference's audio",
+                    detail: extracted == nil
+                        ? "Extract its soundtrack and place it under your video. Only do this if you have the rights to use it."
+                        : "\(String(format: "%.0f", extracted!.duration))s extracted. Mix it with your own tracks in the editor.",
+                    systemImage: "waveform",
+                    isSelected: extracted != nil
+                ) {
+                    guard extracted == nil else { return }
+                    Task {
+                        isExtracting = true
+                        if let asset = await model.extractReferenceAudio() {
+                            model.content.referenceAudioAssetID = asset.id
+                        }
+                        isExtracting = false
+                    }
+                }
+            }
+
+            HStack(spacing: Theme.Space.m) {
+                Button {
+                    Task {
+                        isExtracting = true
+                        if let asset = await model.extractReferenceAudio(),
+                           case .sandboxRelativePath(let path) = asset.origin {
+                            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                            extractedForShare = documents.appendingPathComponent(path)
+                        }
+                        isExtracting = false
+                    }
+                } label: {
+                    Label(isExtracting ? "Extracting…" : "Save audio to Files", systemImage: "square.and.arrow.down")
+                        .font(.system(.caption, design: .rounded, weight: .semibold))
+                }
+                .disabled(isExtracting)
+                Spacer()
+                if isExtracting { ProgressView().controlSize(.small) }
+            }
+            .padding(.horizontal, Theme.Space.xs)
+        }
+    }
+
+    // MARK: - Beat
 
     private func beatSection(_ grid: BeatGrid, recipe: EditRecipe) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -98,19 +217,13 @@ struct RecipeSummaryView: View {
                 Text("Rhythm").font(Theme.Font.sectionTitle)
                 GuessedBadge(confidence: grid.bpm.confidence, basis: grid.bpm.basis)
             }
-
             HStack(spacing: Theme.Space.m) {
                 Text("\(Int(grid.bpm.value.rounded())) BPM")
                     .font(Theme.Font.metric)
                     .foregroundStyle(Theme.Palette.accent)
-
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(
-                        grid.cutsAlignedToBeats.value
-                            ? "Cuts land on the beat"
-                            : "Cuts follow their own timing"
-                    )
-                    .font(Theme.Font.callout)
+                    Text(grid.cutsAlignedToBeats.value ? "Cuts land on the beat" : "Cuts follow their own timing")
+                        .font(Theme.Font.callout)
                     Text(grid.cutsAlignedToBeats.basis)
                         .font(Theme.Font.caption)
                         .foregroundStyle(Theme.Palette.tertiaryText)
@@ -119,19 +232,14 @@ struct RecipeSummaryView: View {
             }
             .padding(Theme.Space.m)
             .cardSurface()
-
-            if grid.cutsAlignedToBeats.value {
-                Text("Your video will cut on the beat too — bring your own music and it'll line up.")
-                    .font(Theme.Font.caption)
-                    .foregroundStyle(Theme.Palette.secondaryText)
-            }
         }
     }
+
+    // MARK: - Scenes & text
 
     private func sceneList(_ recipe: EditRecipe) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text("Scene by scene").font(Theme.Font.sectionTitle)
-
             VStack(spacing: 0) {
                 ForEach(recipe.scenes) { scene in
                     SceneSummaryRow(
@@ -154,33 +262,26 @@ struct RecipeSummaryView: View {
 
     private func textSlots(_ recipe: EditRecipe) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Text("Text layers").font(Theme.Font.sectionTitle)
-
+            SectionHeader("Text layers", subtitle: model.fidelity == .closeMatch
+                ? "You'll fill these with your own words on the next screen."
+                : "Not used in this mode — add your own text freely in the editor.")
             VStack(spacing: Theme.Space.s) {
                 ForEach(recipe.fillableTextSlots) { slot in
                     HStack(alignment: .top, spacing: Theme.Space.m) {
                         Image(systemName: "textformat")
                             .foregroundStyle(Theme.Palette.accent)
                             .frame(width: 24)
-
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: Theme.Space.xs) {
                                 Text(slot.role.displayName)
                                     .font(.system(.subheadline, design: .rounded, weight: .medium))
-                                GuessedBadge(
-                                    confidence: slot.style.category.confidence,
-                                    basis: slot.style.category.basis
-                                )
+                                GuessedBadge(confidence: slot.style.category.confidence, basis: slot.style.category.basis)
                             }
-
                             Text("\(slot.style.category.value.displayName) · \(slot.animation.effectiveEntry.displayName.lowercased()) · \(String(format: "%.1f–%.1fs", slot.start, slot.end))")
                                 .font(Theme.Font.caption)
                                 .foregroundStyle(Theme.Palette.secondaryText)
-
-                            // A hint, never content. Shown so the user can size their own copy
-                            // to the layout; it is structurally impossible for this to reach the
-                            // output — see RecipeBinder.buildTextLayers.
                             if let sample = slot.sampleText {
+                                // A hint, never content. See RecipeBinder.buildTextLayers.
                                 Text("reference said: \(sample) (\(slot.charCountHint) chars)")
                                     .font(.system(size: 11))
                                     .foregroundStyle(Theme.Palette.tertiaryText)
@@ -191,6 +292,7 @@ struct RecipeSummaryView: View {
                     }
                     .padding(Theme.Space.m)
                     .cardSurface()
+                    .opacity(model.fidelity == .closeMatch ? 1 : 0.55)
                 }
             }
         }
@@ -198,8 +300,7 @@ struct RecipeSummaryView: View {
 
     private func confidenceNote(_ recipe: EditRecipe) -> some View {
         HStack(alignment: .top, spacing: Theme.Space.s) {
-            Image(systemName: "info.circle")
-                .foregroundStyle(Theme.Palette.tertiaryText)
+            Image(systemName: "info.circle").foregroundStyle(Theme.Palette.tertiaryText)
             Text("Overall confidence \(Int(recipe.confidence.overall * 100))%. Least certain: \(recipe.confidence.weakest). Anything marked *Guessed* is an inference — tap it to see why, and change it in the editor if it's wrong.")
                 .font(Theme.Font.caption)
                 .foregroundStyle(Theme.Palette.tertiaryText)
@@ -222,7 +323,6 @@ private struct SceneSummaryRow: View {
                         .font(.system(.footnote, design: .rounded, weight: .bold))
                         .foregroundStyle(Theme.Palette.secondaryText)
                         .frame(width: 24)
-
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: Theme.Space.xs) {
                             Text(scene.role.value.displayName)
@@ -239,14 +339,8 @@ private struct SceneSummaryRow: View {
                             .font(Theme.Font.caption)
                             .foregroundStyle(Theme.Palette.secondaryText)
                     }
-
                     Spacer(minLength: 0)
-
-                    GuessedBadge(
-                        confidence: scene.move.kind.confidence,
-                        basis: scene.move.kind.basis
-                    )
-
+                    GuessedBadge(confidence: scene.move.kind.confidence, basis: scene.move.kind.basis)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Theme.Palette.tertiaryText)
@@ -262,12 +356,12 @@ private struct SceneSummaryRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     detail("Starts", String(format: "%.2fs", scene.start))
                     if let transition = scene.transitionIn {
-                        detail(
-                            "Enters on",
-                            "\(transition.effectiveKind.displayName)\(transition.effectiveDuration > 0 ? String(format: " (%.2fs)", transition.effectiveDuration) : "")"
-                        )
+                        detail("Enters on", "\(transition.effectiveKind.displayName)\(transition.effectiveDuration > 0 ? String(format: " (%.2fs)", transition.effectiveDuration) : "")")
                     }
                     detail("Camera", scene.move.effectiveKind.displayName)
+                    if let subject = scene.slot.subjectRect {
+                        detail("Subject", String(format: "at (%.0f%%, %.0f%%), %.0f%% of frame", subject.value.centerX * 100, subject.value.centerY * 100, subject.value.area * 100))
+                    }
                     detail("Reference used", scene.sourceKind == .video ? "video" : "a still")
                 }
                 .padding(.horizontal, Theme.Space.m)
@@ -280,12 +374,8 @@ private struct SceneSummaryRow: View {
 
     private func detail(_ label: String, _ value: String) -> some View {
         HStack(spacing: Theme.Space.s) {
-            Text(label)
-                .font(Theme.Font.caption)
-                .foregroundStyle(Theme.Palette.tertiaryText)
-            Text(value)
-                .font(Theme.Font.caption)
-                .foregroundStyle(Theme.Palette.secondaryText)
+            Text(label).font(Theme.Font.caption).foregroundStyle(Theme.Palette.tertiaryText)
+            Text(value).font(Theme.Font.caption).foregroundStyle(Theme.Palette.secondaryText)
         }
     }
 }

@@ -16,6 +16,7 @@ struct MappingView: View {
     @State private var swapTarget: SceneTemplate?
     @State private var shuffleSeed = 0
     @State private var isArranging = false
+    @State private var isCreating = false
 
     var body: some View {
         Group {
@@ -55,7 +56,12 @@ struct MappingView: View {
                         assetID: model.assignment[scene.slot.id],
                         asset: model.assignment[scene.slot.id].flatMap { model.assets[$0] },
                         reason: model.assignment.reasonBySlot[scene.slot.id],
-                        onTap: { swapTarget = scene }
+                        isLocked: model.assignment.isLocked(scene.slot.id),
+                        onTap: { swapTarget = scene },
+                        onToggleLock: {
+                            model.setSlotLocked(!model.assignment.isLocked(scene.slot.id), slotID: scene.slot.id)
+                            Haptics.snap()
+                        }
                     )
                 }
             }
@@ -64,31 +70,48 @@ struct MappingView: View {
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: Theme.Space.s) {
-                PrimaryButton(title: "Looks Good", systemImage: "arrow.right") {
-                    model.bindTimeline()
-                    model.path.append(.generate)
-                }
-                Button {
-                    shuffleSeed += 1
+                PrimaryButton(title: "Create Video", systemImage: "sparkles", isBusy: isCreating) {
                     Task {
-                        isArranging = true
-                        await model.autoArrange(shuffleSeed: shuffleSeed)
-                        isArranging = false
-                        Haptics.snap()
+                        isCreating = true
+                        await model.createVideoAndEdit()
+                        isCreating = false
                     }
-                } label: {
-                    HStack(spacing: Theme.Space.xs) {
-                        if isArranging {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Image(systemName: "shuffle")
-                        }
-                        Text("Shuffle")
-                    }
-                    .font(.system(.subheadline, design: .rounded, weight: .medium))
-                    .foregroundStyle(Theme.Palette.secondaryText)
                 }
-                .minimumHitTarget()
+                HStack(spacing: Theme.Space.l) {
+                    Button {
+                        Task {
+                            isArranging = true
+                            await model.autoArrange(shuffleSeed: 0)
+                            isArranging = false
+                            Haptics.snap()
+                        }
+                    } label: {
+                        Label("Auto Arrange", systemImage: "wand.and.rays")
+                    }
+                    Button {
+                        shuffleSeed += 1
+                        Task {
+                            isArranging = true
+                            await model.autoArrange(shuffleSeed: shuffleSeed)
+                            isArranging = false
+                            Haptics.snap()
+                        }
+                    } label: {
+                        HStack(spacing: Theme.Space.xs) {
+                            if isArranging { ProgressView().controlSize(.small) } else { Image(systemName: "shuffle") }
+                            Text("Shuffle")
+                        }
+                    }
+                    if !model.assignment.lockedSlots.isEmpty {
+                        Button {
+                            for slot in model.assignment.lockedSlots { model.setSlotLocked(false, slotID: slot) }
+                        } label: {
+                            Label("Unpin all", systemImage: "pin.slash")
+                        }
+                    }
+                }
+                .font(.system(.subheadline, design: .rounded, weight: .medium))
+                .foregroundStyle(Theme.Palette.secondaryText)
                 .disabled(isArranging)
             }
             .padding(Theme.Space.m)
@@ -160,7 +183,9 @@ private struct MappingRow: View {
     let assetID: UUID?
     let asset: AssetReference?
     let reason: String?
+    let isLocked: Bool
     let onTap: () -> Void
+    let onToggleLock: () -> Void
 
     var body: some View {
         Button(action: onTap) {
@@ -201,6 +226,18 @@ private struct MappingRow: View {
                 VStack(spacing: 4) {
                     if let asset {
                         MappedThumbnail(asset: asset)
+                            .overlay(alignment: .topTrailing) {
+                                Button(action: onToggleLock) {
+                                    Image(systemName: isLocked ? "pin.fill" : "pin")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(isLocked ? .white : .white.opacity(0.85))
+                                        .padding(5)
+                                        .background(isLocked ? Theme.Palette.accent : .black.opacity(0.45), in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .padding(3)
+                                .accessibilityLabel(isLocked ? "Unpin" : "Pin this photo to this scene")
+                            }
                     } else {
                         RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous)
                             .fill(Theme.Palette.surfaceRaised)
@@ -239,43 +276,10 @@ private struct MappingRow: View {
 
 private struct MappedThumbnail: View {
     let asset: AssetReference
-    @State private var image: UIImage?
 
     var body: some View {
-        RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous)
-            .fill(Theme.Palette.surfaceRaised)
+        AssetThumbnailView(asset: asset, size: CGSize(width: 62, height: 82))
             .frame(width: 62, height: 82)
-            .overlay {
-                if let image {
-                    Image(uiImage: image).resizable().scaledToFill()
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
-            .task { await load() }
-    }
-
-    private func load() async {
-        guard image == nil, case .photoLibrary(let identifier) = asset.origin else { return }
-        guard let phAsset = PHAsset.fetchAssets(
-            withLocalIdentifiers: [identifier], options: nil
-        ).firstObject else { return }
-
-        let options = PHImageRequestOptions()
-        options.isNetworkAccessAllowed = true
-        options.resizeMode = .fast
-
-        image = await withCheckedContinuation { continuation in
-            var resumed = false
-            PHImageManager.default().requestImage(
-                for: phAsset, targetSize: CGSize(width: 160, height: 220),
-                contentMode: .aspectFill, options: options
-            ) { result, info in
-                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-                guard !isDegraded, !resumed else { return }
-                resumed = true
-                continuation.resume(returning: result)
-            }
-        }
     }
 }
 
@@ -296,12 +300,14 @@ private struct SwapSheet: View {
                     ForEach(ranked, id: \.asset.id) { entry in
                         Button {
                             model.assignment[scene.slot.id] = entry.asset.id
+                            // A hand-picked photo is a decision: pin it so Shuffle respects it.
+                            model.setSlotLocked(true, slotID: scene.slot.id)
                             model.assignment.reasonBySlot[scene.slot.id] = "chosen by you"
                             Haptics.snap()
                             dismiss()
                         } label: {
                             VStack(spacing: 4) {
-                                MappedThumbnail(asset: entry.asset)
+                                AssetThumbnailView(asset: entry.asset, size: CGSize(width: 88, height: 118))
                                     .frame(width: 88, height: 118)
                                     .overlay {
                                         if model.assignment[scene.slot.id] == entry.asset.id {
@@ -328,6 +334,15 @@ private struct SwapSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        model.setSlotLocked(!model.assignment.isLocked(scene.slot.id), slotID: scene.slot.id)
+                        Haptics.snap()
+                    } label: {
+                        Image(systemName: model.assignment.isLocked(scene.slot.id) ? "pin.fill" : "pin")
+                    }
+                    .accessibilityLabel("Pin this choice")
                 }
             }
         }

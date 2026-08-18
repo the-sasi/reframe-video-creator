@@ -280,7 +280,7 @@ public struct RecipeBinder: Sendable {
     /// 3. **The default.** No subject known: centred horizontally, biased upward vertically —
     ///    subjects sit above centre far more often than below, and a centred crop on a portrait
     ///    photo decapitates people.
-    static func fillWindow(
+    public static func fillWindow(
         sourceAspect: Double,
         targetAspect: Double,
         subject: NormalizedRect?,

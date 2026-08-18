@@ -88,6 +88,9 @@ struct AnalysisView: View {
                 let recipe = try await pipeline.analyze(url: sourceURL)
                 await MainActor.run {
                     model.recipe = recipe
+                    // Kept only so the soundtrack can be extracted if the user asks on the
+                    // next screen. Analysis itself is finished with the file.
+                    model.referenceURL = sourceURL
                     isFinished = true
                     Haptics.success()
                 }

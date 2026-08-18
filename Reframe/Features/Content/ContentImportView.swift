@@ -20,6 +20,7 @@ struct ContentImportView: View {
     @State private var isPreparing = false
     @State private var isImportingMusic = false
     @State private var showsReorder = false
+    @State private var showsVoiceover = false
     @State private var authorization: PHAuthorizationStatus = .notDetermined
     @State private var lastImportNote: String?
 
@@ -33,9 +34,10 @@ struct ContentImportView: View {
                     permissionBanner
                 }
                 mediaSection
-                if let recipe = model.recipe, !recipe.fillableTextSlots.isEmpty {
+                if let recipe = model.recipe, !recipe.fillableTextSlots.isEmpty, model.fidelity == .closeMatch {
                     textSection(recipe)
                 }
+                audioSection
                 extrasSection
             }
             .padding(Theme.Space.m)
@@ -49,7 +51,7 @@ struct ContentImportView: View {
             FlowProgress(
                 step: model.recipe == nil ? 1 : 2,
                 total: model.recipe == nil ? 2 : 4,
-                title: "Add photos, videos and words"
+                title: "Add photos, videos, words and sound"
             )
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Space.s)
@@ -83,6 +85,11 @@ struct ContentImportView: View {
         }
         .sheet(isPresented: $showsReorder) {
             ReorderSheet()
+        }
+        .sheet(isPresented: $showsVoiceover) {
+            VoiceoverSheet { reference in
+                model.content.voiceoverAssetID = reference.id
+            }
         }
     }
 
@@ -200,7 +207,8 @@ struct ContentImportView: View {
                 spacing: 6
             ) {
                 ForEach(model.assets.visuals) { asset in
-                    AssetThumbnail(asset: asset)
+                    AssetThumbnailView(asset: asset, size: CGSize(width: 90, height: 90))
+                        .aspectRatio(1, contentMode: .fit)
                         .contextMenu {
                             Button("Remove", systemImage: "trash", role: .destructive) {
                                 model.assets.remove(id: asset.id)
@@ -269,16 +277,77 @@ struct ContentImportView: View {
         }
     }
 
+    // MARK: - Audio
+
+    private var audioSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            SectionHeader("Sound", subtitle: "Music, a voiceover, or both. Everything can be re-mixed in the editor.")
+
+            musicRow
+            voiceRow
+            if let referenceID = model.content.referenceAudioAssetID, let track = model.assets[referenceID] {
+                audioRow(
+                    systemImage: "waveform", title: "Reference audio", subtitle: track.displayName,
+                    detail: String(format: "%.0f seconds · kept from the reference", track.duration)
+                ) {
+                    model.content.referenceAudioAssetID = nil
+                    model.assets.remove(id: referenceID)
+                }
+            }
+
+            if model.assets.visuals.contains(where: { $0.kind == .video }) {
+                Toggle(
+                    isOn: Binding(
+                        get: { model.content.clipAudioVolume > 0 },
+                        set: { model.content.clipAudioVolume = $0 ? 0.8 : 0 }
+                    )
+                ) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Keep sound from my clips").font(Theme.Font.body)
+                        Text("Your videos' own audio plays under the music. Off keeps the bed clean.")
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(Theme.Palette.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .tint(Theme.Palette.accent)
+                .padding(Theme.Space.m)
+                .cardSurface()
+            }
+
+            if model.recipe?.audio.hasMusic == true, model.content.musicAssetID == nil, model.content.referenceAudioAssetID == nil {
+                HStack(alignment: .top, spacing: Theme.Space.m) {
+                    Image(systemName: "waveform")
+                        .foregroundStyle(Theme.Palette.accent)
+                        .frame(width: 24)
+                    Text("The reference is cut to music at \(Int(model.recipe?.beatGrid?.bpm.value.rounded() ?? 0)) BPM. Add a track at a similar tempo and the cuts will feel tightest.")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(Theme.Palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(Theme.Space.m)
+                .background(
+                    Theme.Palette.accentSoft,
+                    in: RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
+                )
+            }
+        }
+        .fileImporter(
+            isPresented: $isImportingMusic,
+            allowedContentTypes: [.audio, .mp3, .wav, .mpeg4Audio, .aiff]
+        ) { result in
+            guard case .success(let url) = result else { return }
+            Task { await importMusic(from: url) }
+        }
+    }
+
     // MARK: - Extras
 
     private var extrasSection: some View {
-        // No `@Bindable var model = model` here: shadowing the environment object makes the
-        // async closures further down capture a `var`, which Swift 6 rejects. An explicit
-        // binding for the one toggle that needs it is narrower and compiles.
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text("Optional").font(Theme.Font.sectionTitle)
 
-            if let palette = model.recipe?.palette, !palette.dominant.isEmpty {
+            if let palette = model.recipe?.palette, !palette.dominant.isEmpty, model.recipe?.isBuiltIn != true {
                 Toggle(
                     isOn: Binding(
                         get: { model.matchReferenceLook },
@@ -321,7 +390,7 @@ struct ContentImportView: View {
                             Text("Reorder")
                                 .font(Theme.Font.body)
                                 .foregroundStyle(Theme.Palette.primaryText)
-                            Text("Auto Arrange picks the best fit, but order still matters")
+                            Text("Auto Arrange picks the best fit, but order breaks ties")
                                 .font(Theme.Font.caption)
                                 .foregroundStyle(Theme.Palette.secondaryText)
                         }
@@ -357,142 +426,110 @@ struct ContentImportView: View {
                 .padding(Theme.Space.m)
                 .cardSurface()
             }
-
-            musicRow
-
-            if model.recipe?.audio.hasMusic == true, model.content.musicAssetID == nil {
-                HStack(alignment: .top, spacing: Theme.Space.m) {
-                    Image(systemName: "waveform")
-                        .foregroundStyle(Theme.Palette.accent)
-                        .frame(width: 24)
-                    Text("The reference is cut to music at \(Int(model.recipe?.beatGrid?.bpm.value.rounded() ?? 0)) BPM. Add your own track and the cuts will land on its beat — Reframe never uses the reference's audio.")
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(Theme.Palette.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(Theme.Space.m)
-                .background(
-                    Theme.Palette.accentSoft,
-                    in: RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
-                )
-            }
-        }
-        .fileImporter(
-            isPresented: $isImportingMusic,
-            allowedContentTypes: [.audio, .mp3, .wav, .mpeg4Audio, .aiff]
-        ) { result in
-            guard case .success(let url) = result else { return }
-            Task { await importMusic(from: url) }
         }
     }
 
     private var musicRow: some View {
         Group {
             if let id = model.content.musicAssetID, let track = model.assets[id] {
-                HStack(spacing: Theme.Space.m) {
-                    Image(systemName: "music.note")
-                        .foregroundStyle(Theme.Palette.accent)
-                        .frame(width: 24)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(track.displayName)
-                            .font(Theme.Font.body)
-                            .foregroundStyle(Theme.Palette.primaryText)
-                            .lineLimit(1)
-                        Text(String(format: "%.0f seconds", track.duration))
-                            .font(Theme.Font.caption)
-                            .foregroundStyle(Theme.Palette.secondaryText)
-                    }
-                    Spacer()
-                    Button {
-                        model.content.musicAssetID = nil
-                        model.assets.remove(id: id)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(Theme.Palette.tertiaryText)
-                    }
-                    .buttonStyle(.plain)
+                audioRow(
+                    systemImage: "music.note", title: "Music", subtitle: track.displayName,
+                    detail: String(format: "%.0f seconds", track.duration)
+                ) {
+                    model.content.musicAssetID = nil
+                    model.assets.remove(id: id)
                 }
-                .padding(Theme.Space.m)
-                .cardSurface()
             } else {
-                Button {
+                addRow(systemImage: "music.note", title: "Add music", subtitle: "From Files — an MP3, M4A or WAV you own") {
                     isImportingMusic = true
-                } label: {
-                    HStack(spacing: Theme.Space.m) {
-                        Image(systemName: "music.note")
-                            .foregroundStyle(Theme.Palette.accent)
-                            .frame(width: 24)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Add music")
-                                .font(Theme.Font.body)
-                                .foregroundStyle(Theme.Palette.primaryText)
-                            Text("From Files — an MP3, M4A or WAV you own")
-                                .font(Theme.Font.caption)
-                                .foregroundStyle(Theme.Palette.secondaryText)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Theme.Palette.tertiaryText)
-                    }
-                    .padding(Theme.Space.m)
-                    .cardSurface()
                 }
-                .buttonStyle(.plain)
             }
         }
     }
 
-    /// Copies the chosen track into the sandbox.
-    ///
-    /// Copying rather than referencing, for two reasons: the security-scoped URL from Files
-    /// expires, and preview playback needs a stable local path. Music files are small enough
-    /// that the copy is not worth avoiding, unlike photos.
+    private var voiceRow: some View {
+        Group {
+            if let id = model.content.voiceoverAssetID, let track = model.assets[id] {
+                audioRow(
+                    systemImage: "mic", title: "Voiceover", subtitle: track.displayName,
+                    detail: String(format: "%.0f seconds · music dips under it automatically", track.duration)
+                ) {
+                    model.content.voiceoverAssetID = nil
+                    model.assets.remove(id: id)
+                }
+            } else {
+                addRow(systemImage: "mic", title: "Record a voiceover", subtitle: "Music dips under your voice automatically") {
+                    showsVoiceover = true
+                }
+            }
+        }
+    }
+
+    private func audioRow(
+        systemImage: String, title: String, subtitle: String, detail: String, onRemove: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: Theme.Space.m) {
+            Image(systemName: systemImage)
+                .foregroundStyle(Theme.Palette.accent)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.system(.caption, design: .rounded, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.secondaryText)
+                Text(subtitle)
+                    .font(Theme.Font.body)
+                    .foregroundStyle(Theme.Palette.primaryText)
+                    .lineLimit(1)
+                Text(detail)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.Palette.secondaryText)
+            }
+            Spacer()
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(Theme.Palette.tertiaryText)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(title)")
+        }
+        .padding(Theme.Space.m)
+        .cardSurface()
+    }
+
+    private func addRow(systemImage: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: Theme.Space.m) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(Theme.Palette.accent)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(Theme.Font.body)
+                        .foregroundStyle(Theme.Palette.primaryText)
+                    Text(subtitle)
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(Theme.Palette.secondaryText)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.tertiaryText)
+            }
+            .padding(Theme.Space.m)
+            .cardSurface()
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Copies the chosen track into the sandbox and validates it.
     private func importMusic(from url: URL) async {
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let relative = "ImportedMedia/audio-\(UUID().uuidString).\(url.pathExtension)"
-        let destination = documents.appendingPathComponent(relative)
-        try? FileManager.default.createDirectory(
-            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
-        )
-        try? FileManager.default.removeItem(at: destination)
-
-        guard (try? FileManager.default.copyItem(at: url, to: destination)) != nil else {
-            DiagnosticsLog.shared.failure("content", "could not copy audio \(url.lastPathComponent)")
-            lastImportNote = "Couldn't read that audio file."
+        let (reference, note) = await MediaImport.importAudio(from: url)
+        guard let reference else {
+            lastImportNote = note
             return
         }
-
-        let asset = AVURLAsset(url: destination)
-        let duration = (try? await asset.load(.duration).seconds) ?? 0
-
-        // DRM-protected tracks (anything from Apple Music) copy fine but have no readable
-        // audio track, so catch that here rather than at export time.
-        let hasAudio = ((try? await asset.loadTracks(withMediaType: .audio)) ?? []).isEmpty == false
-        guard duration > 0, hasAudio else {
-            try? FileManager.default.removeItem(at: destination)
-            DiagnosticsLog.shared.warning("content", "audio unreadable or DRM-protected: \(url.lastPathComponent)")
-            lastImportNote = "That track is protected and can't be used. Apple Music downloads won't work — try a file you own."
-            return
-        }
-
-        let reference = AssetReference(
-            kind: .audio,
-            origin: .sandboxRelativePath(relative),
-            displayName: url.deletingPathExtension().lastPathComponent,
-            pixelWidth: 0,
-            pixelHeight: 0,
-            duration: duration
-        )
         model.assets.add(reference)
         model.content.musicAssetID = reference.id
         lastImportNote = nil
-        DiagnosticsLog.shared.info(
-            "content", "music added: \(reference.displayName), \(String(format: "%.1fs", duration))"
-        )
     }
 
     // MARK: - Import
@@ -509,7 +546,7 @@ struct ContentImportView: View {
         for item in items {
             // Preferred path: reference the library asset by identifier, copying nothing.
             if let identifier = item.itemIdentifier,
-               let reference = Self.libraryReference(for: identifier) {
+               let reference = MediaImport.libraryReference(for: identifier) {
                 if !model.assets.assets.contains(where: { $0.origin == reference.origin }) {
                     model.assets.add(reference)
                     added += 1
@@ -517,10 +554,9 @@ struct ContentImportView: View {
                 continue
             }
 
-            // Fallback: no identifier — Limited Library access, an iCloud-only item, or a
-            // picker that declined to hand one over. Copy the file into the sandbox instead so
-            // the import still succeeds rather than silently dropping the item.
-            if let reference = await Self.copiedReference(from: item) {
+            // Fallback: no identifier — copy the file into the sandbox instead so the import
+            // still succeeds rather than silently dropping the item.
+            if let reference = await MediaImport.copiedReference(from: item) {
                 model.assets.add(reference)
                 copied += 1
             } else {
@@ -541,94 +577,10 @@ struct ContentImportView: View {
     }
 
     private func loadLogo(_ item: PhotosPickerItem) async {
-        let reference: AssetReference?
-        if let identifier = item.itemIdentifier {
-            reference = Self.libraryReference(for: identifier)
-        } else {
-            reference = await Self.copiedReference(from: item)
-        }
-        guard let reference else { return }
+        guard let reference = await MediaImport.reference(from: item) else { return }
         model.assets.add(reference)
         model.content.logoAssetID = reference.id
         logoItem = nil
-    }
-
-    /// Builds a reference from a Photos identifier, reading dimensions from `PHAsset` rather
-    /// than by decoding — so adding 40 items costs no image decoding at all.
-    private static func libraryReference(for identifier: String) -> AssetReference? {
-        let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
-        guard let phAsset = fetch.firstObject else { return nil }
-
-        let kind: AssetKind
-        switch phAsset.mediaType {
-        case .image: kind = .image
-        case .video: kind = .video
-        case .audio: kind = .audio
-        default: return nil
-        }
-
-        return AssetReference(
-            kind: kind,
-            origin: .photoLibrary(localIdentifier: identifier),
-            displayName: (phAsset.value(forKey: "filename") as? String) ?? "Item",
-            pixelWidth: phAsset.pixelWidth,
-            pixelHeight: phAsset.pixelHeight,
-            duration: phAsset.duration,
-            creationDate: phAsset.creationDate
-        )
-    }
-
-    /// Copies a picked item into the sandbox and measures it. Slower and uses disk, which is
-    /// why it is the fallback rather than the default.
-    private static func copiedReference(from item: PhotosPickerItem) async -> AssetReference? {
-        guard let media = try? await item.loadTransferable(type: PickedMedia.self) else {
-            return nil
-        }
-
-        let isVideo = media.url.pathExtension.lowercased() != "jpg"
-            && ["mov", "mp4", "m4v"].contains(media.url.pathExtension.lowercased())
-
-        var width = 0
-        var height = 0
-        var duration = 0.0
-
-        if isVideo {
-            let asset = AVURLAsset(url: media.url)
-            if let track = try? await asset.loadTracks(withMediaType: .video).first,
-               let size = try? await track.load(.naturalSize),
-               let transform = try? await track.load(.preferredTransform) {
-                let presented = size.applying(transform)
-                width = Int(abs(presented.width).rounded())
-                height = Int(abs(presented.height).rounded())
-            }
-            duration = (try? await asset.load(.duration).seconds) ?? 0
-        } else if let source = CGImageSourceCreateWithURL(media.url as CFURL, nil),
-                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
-            width = (properties[kCGImagePropertyPixelWidth] as? Int) ?? 0
-            height = (properties[kCGImagePropertyPixelHeight] as? Int) ?? 0
-        }
-
-        guard width > 0, height > 0 else { return nil }
-
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let relative = "ImportedMedia/\(media.url.lastPathComponent)"
-        let destination = documents.appendingPathComponent(relative)
-        try? FileManager.default.createDirectory(
-            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
-        )
-        try? FileManager.default.removeItem(at: destination)
-        guard (try? FileManager.default.moveItem(at: media.url, to: destination)) != nil else {
-            return nil
-        }
-
-        return AssetReference(
-            kind: isVideo ? .video : .image,
-            origin: .sandboxRelativePath(relative),
-            displayName: media.url.lastPathComponent,
-            pixelWidth: width,
-            pixelHeight: height,
-            duration: duration
-        )
     }
 
     private func arrange() async {
@@ -642,8 +594,7 @@ struct ContentImportView: View {
             DiagnosticsLog.shared.info(
                 "content", "scratch build from \(model.assets.visuals.count) assets"
             )
-            model.buildScratchTimeline()
-            model.path.append(.editor)
+            await model.createVideoAndEdit()
             return
         }
 
@@ -654,132 +605,5 @@ struct ContentImportView: View {
         await model.autoArrange()
         model.bindTimeline()
         model.path.append(.mapping)
-    }
-}
-
-/// Carries a picked photo or video out of the picker as a file we control.
-///
-/// Both representations are declared because `.any(of: [.images, .videos])` can hand back
-/// either, and a movie has no useful `Data` representation at 4K.
-struct PickedMedia: Transferable {
-    let url: URL
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(contentType: .movie) { media in
-            SentTransferredFile(media.url)
-        } importing: { received in
-            PickedMedia(url: try Self.stage(received.file, fallbackExtension: "mov"))
-        }
-
-        FileRepresentation(contentType: .image) { media in
-            SentTransferredFile(media.url)
-        } importing: { received in
-            PickedMedia(url: try Self.stage(received.file, fallbackExtension: "jpg"))
-        }
-    }
-
-    /// The picker deletes its temporary file the moment the transfer completes, so it has to be
-    /// moved somewhere we own before anything else touches it.
-    private static func stage(_ file: URL, fallbackExtension: String) throws -> URL {
-        let ext = file.pathExtension.isEmpty ? fallbackExtension : file.pathExtension
-        let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent("picked-\(UUID().uuidString).\(ext)")
-        try? FileManager.default.removeItem(at: destination)
-        try FileManager.default.copyItem(at: file, to: destination)
-        return destination
-    }
-}
-
-private struct AssetThumbnail: View {
-    let asset: AssetReference
-    @State private var image: UIImage?
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous)
-            .fill(Theme.Palette.surfaceRaised)
-            .aspectRatio(1, contentMode: .fit)
-            .overlay {
-                if let image {
-                    Image(uiImage: image).resizable().scaledToFill()
-                } else {
-                    ProgressView().controlSize(.small)
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
-            .overlay(alignment: .bottomTrailing) {
-                if asset.kind == .video {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white)
-                        .shadow(radius: 2)
-                        .padding(3)
-                }
-            }
-            .task { await load() }
-            .accessibilityLabel(asset.displayName)
-    }
-
-    private func load() async {
-        guard image == nil else { return }
-
-        switch asset.origin {
-        case .photoLibrary(let identifier):
-            image = await Self.libraryThumbnail(identifier)
-        case .sandboxRelativePath(let path):
-            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            image = Self.fileThumbnail(documents.appendingPathComponent(path), isVideo: asset.kind == .video)
-        case .fileBookmark:
-            image = nil
-        }
-    }
-
-    private static func libraryThumbnail(_ identifier: String) async -> UIImage? {
-        guard let phAsset = PHAsset.fetchAssets(
-            withLocalIdentifiers: [identifier], options: nil
-        ).firstObject else { return nil }
-
-        let options = PHImageRequestOptions()
-        // iCloud-resident photos would otherwise show a permanent spinner in the grid.
-        options.isNetworkAccessAllowed = true
-        options.deliveryMode = .opportunistic
-        options.resizeMode = .fast
-
-        return await withCheckedContinuation { continuation in
-            var resumed = false
-            PHImageManager.default().requestImage(
-                for: phAsset,
-                targetSize: CGSize(width: 200, height: 200),
-                contentMode: .aspectFill,
-                options: options
-            ) { result, info in
-                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-                guard !isDegraded, !resumed else { return }
-                resumed = true
-                continuation.resume(returning: result)
-            }
-        }
-    }
-
-    private static func fileThumbnail(_ url: URL, isVideo: Bool) -> UIImage? {
-        if isVideo {
-            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
-            generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 200, height: 200)
-            guard let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) else {
-                return nil
-            }
-            return UIImage(cgImage: cgImage)
-        }
-
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let thumbnail = CGImageSourceCreateThumbnailAtIndex(
-                source, 0,
-                [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 200,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                ] as CFDictionary
-              ) else { return nil }
-        return UIImage(cgImage: thumbnail)
     }
 }

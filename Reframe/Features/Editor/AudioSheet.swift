@@ -3,228 +3,318 @@ import ReframeKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Music for the timeline: add, replace, level, remove.
+/// The mix: every track, its level and fades, ducking, and ways to add more.
 ///
 /// Every change goes through an `EditCommand`, so audio edits sit in the same undo stack as
-/// everything else rather than being a special case that silently escapes it.
+/// everything else rather than being a special case that silently escapes it. What is heard
+/// in the preview is what the exporter writes — both come from `AudioMixPlanner`.
 struct AudioSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
     let document: TimelineDocument
+    let currentTime: Double
+    var selectedID: UUID?
 
     @State private var isImporting = false
+    @State private var showsVoiceover = false
     @State private var note: String?
+    @State private var isExtracting = false
+    @State private var expandedID: UUID?
 
-    private var audioClip: AudioClip? { document.timeline.audio.first }
-    private var track: AssetReference? { audioClip.flatMap { model.assets[$0.assetID] } }
+    private var timeline: Timeline { document.timeline }
+    private var videoClipsWithAudio: [VideoClip] {
+        timeline.clips.filter { clip in
+            guard let id = clip.assetID, let asset = model.assets[id] else { return false }
+            return asset.kind == .video
+        }
+    }
 
     var body: some View {
-        NavigationStack {
+        SheetScaffold(title: "Audio") {
             List {
-                Section {
-                    if let clip = audioClip, let track {
-                        VStack(alignment: .leading, spacing: Theme.Space.s) {
-                            HStack(spacing: Theme.Space.m) {
-                                Image(systemName: "music.note")
-                                    .foregroundStyle(Theme.Palette.accent)
-                                    .frame(width: 24)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(track.displayName)
-                                        .font(Theme.Font.body)
-                                        .lineLimit(1)
-                                    Text(String(format: "%.0fs of %.0fs used", clip.duration, track.duration))
-                                        .font(Theme.Font.caption)
-                                        .foregroundStyle(Theme.Palette.secondaryText)
-                                }
-                                Spacer()
-                            }
-
-                            if track.duration < clip.duration - 0.5 {
-                                Label(
-                                    "This track is shorter than the video — it'll go silent near the end.",
-                                    systemImage: "exclamationmark.triangle"
-                                )
-                                .font(Theme.Font.caption)
-                                .foregroundStyle(Theme.Palette.warning)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    } else {
-                        Text("No music yet.")
-                            .font(Theme.Font.callout)
-                            .foregroundStyle(Theme.Palette.secondaryText)
-                    }
-
-                    Button {
-                        isImporting = true
-                    } label: {
-                        Label(
-                            audioClip == nil ? "Add Music" : "Replace Music",
-                            systemImage: "plus.circle"
-                        )
-                    }
-                } header: {
-                    Text("Track")
-                } footer: {
-                    Text("Pick an MP3, M4A or WAV from Files. Apple Music downloads are protected and can't be used.")
-                }
-
-                if let clip = audioClip {
-                    Section {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack {
-                                Text("Volume")
-                                Spacer()
-                                Text("\(Int(clip.volume * 100))%")
-                                    .font(.system(.caption, design: .rounded).monospacedDigit())
-                                    .foregroundStyle(Theme.Palette.secondaryText)
-                            }
-                            Slider(
-                                value: Binding(
-                                    get: { clip.volume },
-                                    set: { setVolume($0, for: clip) }
-                                ),
-                                in: 0...1,
-                                onEditingChanged: { editing in
-                                    if editing {
-                                        document.beginGesture(key: "audiovol:\(clip.id)")
-                                    } else {
-                                        document.endGesture()
-                                    }
-                                }
-                            )
-                            .tint(Theme.Palette.accent)
-                        }
-                        .padding(.vertical, 2)
-                    } header: {
-                        Text("Level")
-                    } footer: {
-                        Text("Fades in over \(String(format: "%.2fs", clip.fadeIn)) and out over \(String(format: "%.2fs", clip.fadeOut)) automatically.")
-                    }
-
-                    Section {
-                        Button(role: .destructive) {
-                            removeMusic(clip)
-                        } label: {
-                            Label("Remove Music", systemImage: "trash")
-                        }
-                    }
-                }
-
-                if let beatGrid = model.recipe?.beatGrid {
-                    Section {
-                        LabeledContent("Reference tempo", value: "\(Int(beatGrid.bpm.value.rounded())) BPM")
-                        LabeledContent(
-                            "Cuts",
-                            value: beatGrid.cutsAlignedToBeats.value ? "on the beat" : "reference timing"
-                        )
-                    } header: {
-                        Text("Rhythm")
-                    } footer: {
-                        Text("Scene lengths were taken from the reference's rhythm. A track at a similar tempo will feel tightest.")
-                    }
-                }
-
+                tracksSection
+                addSection
+                if !videoClipsWithAudio.isEmpty { clipAudioSection }
+                mixSection
+                if let beatGrid = model.recipe?.beatGrid { rhythmSection(beatGrid) }
                 if let note {
-                    Section {
-                        Text(note)
-                            .font(Theme.Font.caption)
-                            .foregroundStyle(Theme.Palette.warning)
-                    }
+                    Section { Text(note).font(Theme.Font.caption).foregroundStyle(Theme.Palette.warning) }
                 }
             }
-            .navigationTitle("Audio")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .fileImporter(
-                isPresented: $isImporting,
-                allowedContentTypes: [.audio, .mp3, .wav, .mpeg4Audio, .aiff]
-            ) { result in
-                guard case .success(let url) = result else { return }
-                Task { await addMusic(from: url) }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+        }
+        .onAppear { expandedID = selectedID ?? timeline.audio.first?.id }
+        .fileImporter(isPresented: $isImporting, allowedContentTypes: [.audio, .mp3, .wav, .mpeg4Audio, .aiff]) { result in
+            guard case .success(let url) = result else { return }
+            Task { await addMusic(from: url) }
+        }
+        .sheet(isPresented: $showsVoiceover) {
+            VoiceoverSheet { reference in
+                addClip(asset: reference, role: .voice, at: currentTime)
             }
         }
-        .presentationDetents([.medium, .large])
+    }
+
+    // MARK: - Tracks
+
+    @ViewBuilder
+    private var tracksSection: some View {
+        Section {
+            if timeline.audio.isEmpty {
+                Text("No audio yet. Add music, record a voiceover, or keep the reference's soundtrack.")
+                    .font(Theme.Font.callout)
+                    .foregroundStyle(Theme.Palette.secondaryText)
+            }
+            ForEach(timeline.audio) { clip in
+                trackRow(clip)
+            }
+        } header: {
+            Text("Tracks")
+        }
+    }
+
+    private func trackRow(_ clip: AudioClip) -> some View {
+        let track = model.assets[clip.assetID]
+        let isExpanded = expandedID == clip.id
+        return VStack(alignment: .leading, spacing: Theme.Space.s) {
+            Button {
+                withAnimation(Theme.Motion.quick) { expandedID = isExpanded ? nil : clip.id }
+            } label: {
+                HStack(spacing: Theme.Space.m) {
+                    Image(systemName: icon(for: clip.role))
+                        .foregroundStyle(Color(uiColor: TimelineContentView.color(for: clip.role)))
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(track?.displayName ?? clip.role.displayName)
+                            .font(Theme.Font.body)
+                            .foregroundStyle(Theme.Palette.primaryText)
+                            .lineLimit(1)
+                        Text("\(clip.role.displayName) · \(PreviewPane.timecode(clip.start))–\(PreviewPane.timecode(clip.end))\(clip.isMuted ? " · muted" : "")")
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(Theme.Palette.secondaryText)
+                    }
+                    Spacer()
+                    Text("\(Int(clip.volume * 100))%")
+                        .font(.system(.caption, design: .rounded).monospacedDigit())
+                        .foregroundStyle(Theme.Palette.secondaryText)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.tertiaryText)
+                        .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                LabeledSlider(title: "Volume", value: clip.volume, range: 0...1, format: { "\(Int($0 * 100))%" },
+                              onEditingChanged: gesture("audiovol:\(clip.id)")) { value in
+                    document.perform(.setAudioVolume(id: clip.id, volume: value, wasVolume: clip.volume))
+                }
+                let maxFade = max(0.1, clip.duration / 2)
+                LabeledSlider(title: "Fade in", value: min(clip.fadeIn, maxFade), range: 0...maxFade, format: { String(format: "%.1fs", $0) },
+                              onEditingChanged: gesture("audiofade:\(clip.id)")) { value in
+                    document.perform(.setAudioFades(id: clip.id, fadeIn: value, fadeOut: clip.fadeOut, wasFadeIn: clip.fadeIn, wasFadeOut: clip.fadeOut))
+                }
+                LabeledSlider(title: "Fade out", value: min(clip.fadeOut, maxFade), range: 0...maxFade, format: { String(format: "%.1fs", $0) },
+                              onEditingChanged: gesture("audiofade:\(clip.id)")) { value in
+                    document.perform(.setAudioFades(id: clip.id, fadeIn: clip.fadeIn, fadeOut: value, wasFadeIn: clip.fadeIn, wasFadeOut: clip.fadeOut))
+                }
+                HStack(spacing: Theme.Space.s) {
+                    Chip(title: clip.isMuted ? "Unmute" : "Mute", systemImage: clip.isMuted ? "speaker.slash" : "speaker.wave.2", isSelected: clip.isMuted) {
+                        document.perform(.setAudioMuted(id: clip.id, isMuted: !clip.isMuted, wasMuted: clip.isMuted))
+                    }
+                    Chip(title: "Start at playhead", systemImage: "arrow.right.to.line") {
+                        document.perform(.retimeAudioClip(id: clip.id, start: currentTime, duration: clip.duration, sourceStart: clip.sourceStart,
+                                                          wasStart: clip.start, wasDuration: clip.duration, wasSourceStart: clip.sourceStart))
+                    }
+                    Chip(title: "Fit to video", systemImage: "rectangle.expand.vertical") {
+                        let sourceLength = track?.duration ?? timeline.duration
+                        let duration = sourceLength > 0 ? min(timeline.duration, sourceLength - clip.sourceStart) : timeline.duration
+                        document.perform(.retimeAudioClip(id: clip.id, start: 0, duration: max(0.2, duration), sourceStart: clip.sourceStart,
+                                                          wasStart: clip.start, wasDuration: clip.duration, wasSourceStart: clip.sourceStart))
+                    }
+                    Menu {
+                        ForEach([AudioRole.music, .voice, .effect, .reference], id: \.self) { role in
+                            Button(role.displayName) { setRole(role, for: clip) }
+                        }
+                    } label: {
+                        Chip(title: clip.role.displayName, systemImage: "tag") {}
+                    }
+                }
+                Button(role: .destructive) {
+                    guard let index = timeline.audio.firstIndex(where: { $0.id == clip.id }) else { return }
+                    document.perform(.deleteAudioClip(index: index, clip: clip))
+                    if clip.assetID == model.content.musicAssetID { model.content.musicAssetID = nil }
+                    if clip.assetID == model.content.voiceoverAssetID { model.content.voiceoverAssetID = nil }
+                    if clip.assetID == model.content.referenceAudioAssetID { model.content.referenceAudioAssetID = nil }
+                } label: {
+                    Label("Remove track", systemImage: "trash")
+                        .font(.system(.caption, design: .rounded, weight: .medium))
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func icon(for role: AudioRole) -> String {
+        switch role {
+        case .music: return "music.note"
+        case .voice: return "mic"
+        case .effect: return "sparkles"
+        case .reference: return "waveform"
+        case .clipAudio: return "film"
+        }
+    }
+
+    // MARK: - Add
+
+    private var addSection: some View {
+        Section {
+            Button { isImporting = true } label: { Label("Add music from Files", systemImage: "music.note.list") }
+            Button { showsVoiceover = true } label: { Label("Record a voiceover", systemImage: "mic.badge.plus") }
+            if model.referenceURL != nil, model.recipe?.source.hasAudio == true, model.content.referenceAudioAssetID == nil {
+                Button {
+                    Task {
+                        isExtracting = true
+                        if let asset = await model.extractReferenceAudio() {
+                            model.content.referenceAudioAssetID = asset.id
+                            addClip(asset: asset, role: .reference, at: 0)
+                        }
+                        isExtracting = false
+                    }
+                } label: {
+                    HStack {
+                        Label("Keep the reference's audio", systemImage: "waveform.badge.plus")
+                        if isExtracting { Spacer(); ProgressView().controlSize(.small) }
+                    }
+                }
+                .disabled(isExtracting)
+            }
+        } header: {
+            Text("Add")
+        } footer: {
+            Text("MP3, M4A or WAV you own. Apple Music downloads are protected and can't be used. A voiceover is placed at the playhead and the music dips under it automatically.")
+        }
+    }
+
+    // MARK: - Clip audio
+
+    private var clipAudioSection: some View {
+        Section {
+            ForEach(videoClipsWithAudio) { clip in
+                let name = clip.assetID.flatMap { model.assets[$0]?.displayName } ?? "Clip"
+                LabeledSlider(title: name, value: clip.volume, range: 0...1, format: { $0 < 0.005 ? "muted" : "\(Int($0 * 100))%" },
+                              onEditingChanged: gesture("clipvol:\(clip.id)")) { value in
+                    document.perform(.setClipVolume(id: clip.id, volume: value, wasVolume: clip.volume))
+                }
+            }
+            HStack {
+                Button("Mute all clips") {
+                    for clip in videoClipsWithAudio where clip.volume > 0 {
+                        document.perform(.setClipVolume(id: clip.id, volume: 0, wasVolume: clip.volume))
+                    }
+                }
+                Spacer()
+                Button("All clips 80%") {
+                    for clip in videoClipsWithAudio {
+                        document.perform(.setClipVolume(id: clip.id, volume: 0.8, wasVolume: clip.volume))
+                    }
+                }
+            }
+            .font(.system(.caption, design: .rounded, weight: .medium))
+        } header: {
+            Text("Sound from your clips")
+        } footer: {
+            Text("Video clips start muted so the music bed is clean. Raise a clip to hear its own audio; it dips under a voiceover like everything else.")
+        }
+    }
+
+    // MARK: - Mix
+
+    private var mixSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { timeline.duckMusicUnderVoice },
+                set: { document.perform(.setDucking(enabled: $0, wasEnabled: timeline.duckMusicUnderVoice)) }
+            )) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Duck music under voice")
+                    Text("Music and clip audio drop to about a quarter while a voiceover plays, with a short ramp either side.")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(Theme.Palette.secondaryText)
+                }
+            }
+            .tint(Theme.Palette.accent)
+        } header: {
+            Text("Mix")
+        }
+    }
+
+    private func rhythmSection(_ beatGrid: BeatGrid) -> some View {
+        Section {
+            LabeledContent("Reference tempo", value: "\(Int(beatGrid.bpm.value.rounded())) BPM")
+            LabeledContent("Cuts", value: beatGrid.cutsAlignedToBeats.value ? "on the beat" : "reference timing")
+        } header: {
+            Text("Rhythm")
+        } footer: {
+            Text("Scene lengths were taken from the reference's rhythm. A track at a similar tempo will feel tightest; the beat ticks on the timeline show where the reference's beats fell.")
+        }
     }
 
     // MARK: - Actions
 
-    private func setVolume(_ value: Double, for clip: AudioClip) {
-        document.perform(
-            .setAudioVolume(id: clip.id, volume: value, wasVolume: clip.volume)
-        )
+    private func gesture(_ key: String) -> (Bool) -> Void {
+        { editing in
+            if editing { document.beginGesture(key: key) } else { document.endGesture() }
+        }
     }
 
-    private func removeMusic(_ clip: AudioClip) {
-        guard let index = document.timeline.audio.firstIndex(where: { $0.id == clip.id }) else {
-            return
-        }
+    private func setRole(_ role: AudioRole, for clip: AudioClip) {
+        // Role changes are structural for the mix, so they replace the clip.
+        guard let index = timeline.audio.firstIndex(where: { $0.id == clip.id }) else { return }
+        var updated = clip
+        updated.role = role
         document.perform(.deleteAudioClip(index: index, clip: clip))
-        model.content.musicAssetID = nil
+        document.perform(.addAudioClip(clip: updated))
+    }
+
+    private func addClip(asset: AssetReference, role: AudioRole, at start: Double) {
+        let timelineDuration = timeline.duration
+        let length = asset.duration > 0 ? asset.duration : timelineDuration
+        let clip = AudioClip(
+            assetID: asset.id,
+            start: max(0, min(start, max(0, timelineDuration - 0.2))),
+            duration: min(length, max(0.2, timelineDuration - start)),
+            sourceStart: 0,
+            volume: role == .reference && timeline.audio.contains { $0.role == .music } ? 0.5 : 1.0,
+            fadeIn: role == .voice ? 0.02 : 0.15,
+            fadeOut: role == .voice ? 0.05 : min(0.8, timelineDuration * 0.1),
+            role: role
+        )
+        document.perform(.addAudioClip(clip: clip))
+        expandedID = clip.id
     }
 
     private func addMusic(from url: URL) async {
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let relative = "ImportedMedia/audio-\(UUID().uuidString).\(url.pathExtension)"
-        let destination = documents.appendingPathComponent(relative)
-        try? FileManager.default.createDirectory(
-            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
-        )
-        guard (try? FileManager.default.copyItem(at: url, to: destination)) != nil else {
-            note = "Couldn't read that file."
+        let (reference, importNote) = await MediaImport.importAudio(from: url)
+        guard let reference else {
+            note = importNote
             return
         }
-
-        let asset = AVURLAsset(url: destination)
-        let duration = (try? await asset.load(.duration).seconds) ?? 0
-        let hasAudio = ((try? await asset.loadTracks(withMediaType: .audio)) ?? []).isEmpty == false
-
-        guard duration > 0, hasAudio else {
-            try? FileManager.default.removeItem(at: destination)
-            note = "That track is protected and can't be used. Apple Music downloads won't work — try a file you own."
-            DiagnosticsLog.shared.warning("editor", "audio unreadable/DRM: \(url.lastPathComponent)")
-            return
-        }
-
-        let reference = AssetReference(
-            kind: .audio,
-            origin: .sandboxRelativePath(relative),
-            displayName: url.deletingPathExtension().lastPathComponent,
-            pixelWidth: 0, pixelHeight: 0, duration: duration
-        )
         model.assets.add(reference)
-        model.content.musicAssetID = reference.id
-
-        // Replace rather than layer: one music bed is the whole model here, and silently
-        // stacking a second track under the first would be baffling.
-        if let existing = audioClip,
-           let index = document.timeline.audio.firstIndex(where: { $0.id == existing.id }) {
+        // Replace an existing music bed rather than layering: one music track is the whole
+        // model here, and silently stacking a second under the first would be baffling. Other
+        // roles are left alone.
+        if let existing = timeline.audio.first(where: { $0.role == .music }),
+           let index = timeline.audio.firstIndex(where: { $0.id == existing.id }) {
             document.perform(.deleteAudioClip(index: index, clip: existing))
         }
-
-        let timelineDuration = document.timeline.duration
-        let clip = AudioClip(
-            assetID: reference.id,
-            start: 0,
-            duration: min(timelineDuration, duration),
-            sourceStart: 0,
-            volume: 1.0,
-            fadeIn: 0.15,
-            fadeOut: min(0.8, timelineDuration * 0.1)
-        )
-        document.perform(.addAudioClip(clip: clip))
-
+        model.content.musicAssetID = reference.id
+        addClip(asset: reference, role: .music, at: 0)
         note = nil
-        DiagnosticsLog.shared.info(
-            "editor", "music added: \(reference.displayName) \(String(format: "%.1fs", duration))"
-        )
     }
 }

@@ -28,7 +28,13 @@ struct DiagnosticsView: View {
                 Button {
                     export()
                 } label: {
-                    Label("Export Log", systemImage: "square.and.arrow.up")
+                    Label("Export Log (text)", systemImage: "square.and.arrow.up")
+                }
+
+                Button {
+                    shareURL = try? DiagnosticsLog.shared.writeJSONReport()
+                } label: {
+                    Label("Export Log (JSON)", systemImage: "curlybraces")
                 }
 
                 Button {
@@ -86,7 +92,7 @@ struct DiagnosticsView: View {
         }
         .task { refresh() }
         .sheet(item: $shareURL) { url in
-            DiagnosticsShareSheet(items: [url])
+            ShareSheet(items: [url])
         }
     }
 
@@ -142,14 +148,4 @@ private struct EntryRow: View {
         case .failure: return Theme.Palette.danger
         }
     }
-}
-
-private struct DiagnosticsShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

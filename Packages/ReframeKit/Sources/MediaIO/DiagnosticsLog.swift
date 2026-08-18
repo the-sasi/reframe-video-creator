@@ -137,6 +137,43 @@ public final class DiagnosticsLog: @unchecked Sendable {
         try formattedReport().write(to: url, atomically: true, encoding: .utf8)
         return url
     }
+
+    /// The same record as JSON, for tooling: device facts plus every entry.
+    public struct Report: Codable, Sendable {
+        public var generatedAt: Date
+        public var build: String
+        public var device: String
+        public var os: String
+        public var memoryMB: UInt64
+        public var thermal: String
+        public var peakFootprintMB: Double
+        public var entries: [Entry]
+    }
+
+    public func jsonReport() -> Report {
+        let snapshot = self.snapshot()
+        return Report(
+            generatedAt: Date(),
+            build: DeviceInfo.buildDescription(),
+            device: DeviceInfo.modelIdentifier(),
+            os: ProcessInfo.processInfo.operatingSystemVersionString,
+            memoryMB: ProcessInfo.processInfo.physicalMemory / 1_048_576,
+            thermal: DeviceInfo.thermalDescription(),
+            peakFootprintMB: snapshot.map(\.memoryMB).max() ?? 0,
+            entries: snapshot
+        )
+    }
+
+    public func writeJSONReport() throws -> URL {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(jsonReport())
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("reframe-diagnostics.json")
+        try data.write(to: url, options: .atomic)
+        return url
+    }
 }
 
 /// Device facts worth having at the top of every report.
