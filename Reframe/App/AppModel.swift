@@ -24,9 +24,11 @@ final class AppModel {
     // MARK: Services
 
     let projectStore = ProjectStore()
-    let resolver = AssetResolver()
+    let resolver: AssetResolver
     let intelligence = IntelligenceService()
     private(set) var renderer: MetalRenderer?
+    /// Looping previews for the template library, rendered lazily on the device.
+    private(set) var templatePreviews: TemplatePreviewStore
 
     // MARK: In-flight project
 
@@ -98,6 +100,9 @@ final class AppModel {
     }
 
     init() {
+        let resolver = AssetResolver()
+        self.resolver = resolver
+        var renderer: MetalRenderer?
         do {
             renderer = try MetalRenderer()
         } catch let error as ReframeError {
@@ -107,6 +112,8 @@ final class AppModel {
         } catch {
             PerformanceLog.error("Metal unavailable: \(error)")
         }
+        self.renderer = renderer
+        self.templatePreviews = TemplatePreviewStore(renderer: renderer, resolver: resolver)
     }
 
     // MARK: - Flow
@@ -541,6 +548,7 @@ final class AppModel {
 
     func deleteRecipe(id: UUID) async {
         try? await projectStore.deleteRecipe(id: id)
+        templatePreviews.invalidate(recipeID: id)
         await refreshLibrary()
     }
 
@@ -692,6 +700,7 @@ final class AppModel {
     func handleMemoryPressure() {
         PerformanceLog.warn("memory warning at \(PerformanceLog.memoryFootprintMB()) MB")
         renderer?.evictCaches()
+        templatePreviews.handleMemoryPressure()
         Task { await resolver.evictCache() }
     }
 

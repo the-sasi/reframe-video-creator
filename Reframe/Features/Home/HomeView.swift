@@ -411,7 +411,7 @@ struct TemplateCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            RhythmSwatch(recipe: recipe)
+            TemplatePreviewTile(recipe: recipe, animated: !compact)
                 .frame(width: compact ? 132 : nil, height: compact ? 92 : 108)
                 .frame(maxWidth: compact ? nil : .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous))
@@ -443,6 +443,71 @@ struct TemplateCard: View {
         .frame(width: compact ? 132 : nil, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(recipe.title), \(recipe.stats.sceneCount) scenes")
+    }
+}
+
+/// What a style actually produces: a looping render of its timeline over placeholder art
+/// (see `TemplatePreviewStore`). Falls back to the rhythm swatch while rendering or when a
+/// preview cannot be made, and says which.
+///
+/// `animated: false` shows the poster frame instead of a player — the Home strip can hold a
+/// dozen cards and a dozen decoders is not a price worth paying for a strip you scroll past.
+struct TemplatePreviewTile: View {
+    @Environment(AppModel.self) private var model
+    let recipe: EditRecipe
+    var animated: Bool = true
+
+    var body: some View {
+        let store = model.templatePreviews
+        ZStack(alignment: .bottomTrailing) {
+            if let url = store.previewURL(for: recipe) {
+                if animated {
+                    ZStack {
+                        // Poster under the player until its first frame lands, so the tile
+                        // never flashes black.
+                        if let poster = store.posters[recipe.id] {
+                            Image(uiImage: poster).resizable().scaledToFill()
+                        } else {
+                            RhythmSwatch(recipe: recipe)
+                        }
+                        LoopingVideoView(url: url)
+                    }
+                } else if let poster = store.posters[recipe.id] {
+                    Image(uiImage: poster).resizable().scaledToFill()
+                } else {
+                    RhythmSwatch(recipe: recipe)
+                }
+            } else {
+                RhythmSwatch(recipe: recipe)
+                statusBadge(store.state(for: recipe))
+            }
+        }
+        .background(Theme.Palette.surfaceRaised)
+        .task(id: recipe.id) { store.request(recipe) }
+    }
+
+    @ViewBuilder
+    private func statusBadge(_ state: TemplatePreviewStore.State?) -> some View {
+        switch state {
+        case .queued, .rendering:
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini).tint(.white)
+                Text("Preview").font(.system(size: 9, weight: .semibold, design: .rounded))
+            }
+            .foregroundStyle(.white.opacity(0.9))
+            .padding(.horizontal, 6).padding(.vertical, 3)
+            .background(.black.opacity(0.35), in: Capsule())
+            .padding(6)
+        case .unavailable:
+            Text("No preview")
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.9))
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .background(.black.opacity(0.35), in: Capsule())
+                .padding(6)
+        case .ready, .none:
+            EmptyView()
+        }
     }
 }
 

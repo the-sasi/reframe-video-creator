@@ -159,9 +159,21 @@ private struct TemplatePreviewSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Space.l) {
-                    RhythmSwatch(recipe: recipe)
-                        .frame(height: 140)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous))
+                    HStack {
+                        Spacer(minLength: 0)
+                        TemplatePreviewTile(recipe: recipe, animated: true)
+                            .aspectRatio(recipe.canvas.aspectRatio, contentMode: .fit)
+                            .frame(maxHeight: 360)
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
+                                    .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
+                            }
+                        Spacer(minLength: 0)
+                    }
+                    Text("Preview uses placeholder photos. Your own photos and words go in the same places.")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(Theme.Palette.tertiaryText)
 
                     HStack(spacing: 0) {
                         MetricTile(value: "\(recipe.stats.sceneCount)", label: "scenes", systemImage: "rectangle.stack")

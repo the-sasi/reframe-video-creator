@@ -44,6 +44,9 @@ struct EditorView: View {
         .toolbar { toolbarContent }
         .task { await prepareEngine() }
         .onAppear { model.markEditorOpen() }
+        .onChange(of: sheet) { _, sheet in
+            if let sheet { DiagnosticsLog.shared.info("editor", "opened \(sheet) sheet") }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
             engine?.handleMemoryPressure()
         }

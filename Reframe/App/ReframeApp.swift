@@ -94,6 +94,12 @@ struct RootView: View {
                 }
         }
         .tint(Theme.Palette.accent)
+        // Navigation breadcrumbs. The diagnostics log is how bugs get reported from a phone to a
+        // machine with no debugger; without "which screen were they on" most UI reports are
+        // unreproducible.
+        .onChange(of: model.path) { _, path in
+            DiagnosticsLog.shared.info("nav", path.isEmpty ? "home" : path.map(\.logName).joined(separator: " › "))
+        }
         .sheet(item: $model.presentedError) { wrapper in
             ErrorSheet(
                 error: wrapper.error,
@@ -131,6 +137,21 @@ enum Route: Hashable {
     case export
     case templates
     case settings
+
+    /// Short, path-free name for the diagnostics log.
+    var logName: String {
+        switch self {
+        case .referenceImport: return "reference"
+        case .analysis: return "analysis"
+        case .recipeSummary: return "summary"
+        case .contentImport: return "content"
+        case .mapping: return "mapping"
+        case .editor: return "editor"
+        case .export: return "export"
+        case .templates: return "templates"
+        case .settings: return "settings"
+        }
+    }
 }
 
 /// `ReframeError` is an enum without `Identifiable`; this wraps it for `.sheet(item:)`.
