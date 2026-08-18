@@ -18,10 +18,12 @@ was archived last year" surface all at once.
 | Vision | OCR, saliency, aesthetics, flow, embeddings | Apple SDK | ✅ Built in | $0 | **Use** |
 | Accelerate (vDSP / vImage) | FFT, HSV conversion, resampling | Apple SDK | ✅ Built in | $0 | **Use** |
 | Core Text | Text rasterisation to texture | Apple SDK | ✅ Built in | $0 | **Use** |
-| Core Image | Thumbnails, colour sampling | Apple SDK | ✅ Built in | $0 | **Use** |
+| ImageIO / Core Graphics | Thumbnails, colour sampling, PNG posters | Apple SDK | ✅ Built in | $0 | **Use** |
 | PhotosUI / Photos | Import and save-to-Photos | Apple SDK | ✅ Built in | $0 | **Use** |
-| SwiftData | Project index | Apple SDK | ✅ Built in | $0 | **Use** |
-| Speech (`SpeechAnalyzer`) | Transcription | Apple SDK | ✅ iOS 26+ | $0 | **Chosen, not yet linked** — speech *presence* is answered deterministically; see [00 §1](00-research.md#openai-whisper--superseded-on-this-platform) |
+| SwiftData | Project index | Apple SDK | ✅ Built in | $0 | **Not used** — the index is rebuilt by scanning `Projects/` (see 01); a second store was overhead for tens of documents |
+| Speech (`SpeechAnalyzer` / `SpeechTranscriber`) | Captions from voiceover or reference audio | Apple SDK | ✅ iOS 26+ | $0 | **Use, optional** — behind an availability check; language assets are downloaded *by the system from Apple* on request (the one network activity besides iCloud Photos, and it is opt-in). Speech *presence* during analysis is still answered deterministically |
+| AVAudioRecorder / AVAudioSession | Voiceover recording | Apple SDK | ✅ Built in | $0 | **Use** |
+| System fonts (SF, Helvetica Neue, Avenir Next, Futura, Georgia, Baskerville, Didot, American Typewriter, Snell Roundhand, Marker Felt, Noteworthy, Chalkduster, Menlo, Courier New, Copperplate) | Text layers | Bundled with iOS; rendering with system fonts inside an app is permitted by the OS licence | ✅ | $0 | **Use** — nothing is embedded or downloaded; `TextFont.all` lists only faces present on every supported iPhone |
 | FoundationModels | Copy suggestions | Apple SDK | ✅ iOS 26+, Apple Intelligence devices | $0 | **Use**, optional, absent-tolerant |
 | Swift stdlib / Foundation | — | Apache 2.0 w/ Runtime Library Exception | ✅ | $0 | **Use** |
 
@@ -98,9 +100,14 @@ design enforces §39 of the brief structurally rather than by warning text:
    OCR results matching `@handle` patterns, follow/subscribe calls-to-action, and text that
    persists across essentially the whole reference in a corner — the signature of a creator
    watermark. These never become slots.
-4. **Reference audio is analysed, never extracted.** `AudioAnalyzer` consumes samples to produce
-   a BPM and a beat grid — a few hundred floats. The decoded audio buffer is not written to
-   disk and the beat grid contains no audio. Output music comes from the user's own file.
+4. **Reference audio is analysed, and extracted only on an explicit tap.** `AudioAnalyzer`
+   consumes samples to produce a BPM and a beat grid — a few hundred floats; the decoded buffer
+   is not written to disk. Separately, the summary screen offers *Keep the reference's audio* /
+   *Save audio to Files*, which run `AudioExtractor` and write an M4A into the sandbox. That is
+   the user's decision, made per project, next to a sentence saying they need the rights to the
+   soundtrack. Nothing is extracted by default and analysis never depends on it. The
+   product-owner brief asked for this capability; keeping it opt-in and visible is the honest
+   way to provide it.
 5. **No watermark on export**, per §26.
 
 The net effect: the artefact that survives analysis is a *structure* — timings, transforms,
