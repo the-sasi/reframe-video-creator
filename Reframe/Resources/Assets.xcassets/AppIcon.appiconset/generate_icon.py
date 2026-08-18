@@ -5,7 +5,8 @@ one-off export nobody can edit.
     python generate_icon.py
 
 Concept — *Reframe*: a faint reference frame behind, tilted; a solid frame in front carrying the
-edit — a play mark over a segmented timeline strip with a playhead, in the amber ramp. Warm charcoal ground so it reads at 60 px
+edit — a play mark over a segmented timeline strip with a playhead, in the amber ramp. Champagne-metal frame with
+specular bands, gold bloom behind the mark, a diagonal sheen and a vignetted warm-charcoal ground so it reads at 60 px
 and sits well next to Apple's own dark-first apps. Drawn at 4× and downsampled for clean edges.
 """
 from PIL import Image, ImageDraw, ImageFilter, ImageChops
@@ -35,9 +36,14 @@ def gradient_background():
     glow = Image.new("L", (W, W), 0)
     gd = ImageDraw.Draw(glow)
     gd.ellipse([-W * 0.25, -W * 0.35, W * 0.75, W * 0.65], fill=255)
-    glow = glow.filter(ImageFilter.GaussianBlur(W * 0.16))
+    glow = glow.filter(ImageFilter.GaussianBlur(W * 0.18))
     warm = Image.new("RGB", (W, W), (245, 184, 77))
-    img = Image.composite(Image.blend(img, warm, 0.42), img, glow.point(lambda v: int(v * 0.6)))
+    img = Image.composite(Image.blend(img, warm, 0.55), img, glow.point(lambda v: int(v * 0.7)))
+    # Vignette: corners fall off so the centre reads as lit.
+    vig = Image.new("L", (W, W), 0)
+    ImageDraw.Draw(vig).ellipse([-W * 0.15, -W * 0.15, W * 1.15, W * 1.15], fill=255)
+    vig = vig.filter(ImageFilter.GaussianBlur(W * 0.22))
+    img = Image.composite(img, Image.new("RGB", (W, W), (8, 6, 5)), vig.point(lambda v: 90 + int(v * 0.65)))
     return img
 
 
@@ -66,8 +72,8 @@ def main():
             cx + ghost_size / 2 - W * 0.055, cy + ghost_size / 2 - W * 0.055]
     ghost = rounded_frame_mask(gbox, radius=W * 0.075, thickness=W * 0.022)
     ghost = rotate_mask(ghost, 9, center=(cx - W * 0.055, cy - W * 0.055))
-    ghost_layer = Image.new("RGBA", (W, W), (255, 240, 220, 0))
-    ghost_layer.putalpha(ghost.point(lambda v: int(v * 0.42)))
+    ghost_layer = Image.new("RGBA", (W, W), (255, 226, 176, 0))
+    ghost_layer.putalpha(ghost.point(lambda v: int(v * 0.40)))
     img = Image.alpha_composite(img, ghost_layer)
 
     # --- Solid frame (yours): thick, upright, front-right, with a soft shadow. ---
@@ -82,9 +88,33 @@ def main():
     shadow = ImageChops.offset(shadow, 0, int(W * 0.018))
     img = Image.alpha_composite(img, shadow)
 
-    frame_layer = Image.new("RGBA", (W, W), (255, 248, 238, 0))
+    # Champagne metal: diagonal ramp light→warm, then a bright specular band across it.
+    frame_layer = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    fpx = frame_layer.load()
+    fb = frame.getbbox()
+    f_top = (255, 252, 244)
+    f_bot = (236, 214, 170)
+    for yy in range(fb[1], fb[3]):
+        for xx in range(fb[0], fb[2]):
+            t = ((xx - fb[0]) + (yy - fb[1])) / ((fb[2] - fb[0]) + (fb[3] - fb[1]))
+            fpx[xx, yy] = (*lerp(f_top, f_bot, t), 255)
     frame_layer.putalpha(frame)
     img = Image.alpha_composite(img, frame_layer)
+    band = Image.new("L", (W, W), 0)
+    ImageDraw.Draw(band).polygon([(box[0] - W * 0.05, box[1] + size * 0.28), (box[0] + size * 0.30, box[1] - W * 0.05),
+                                  (box[0] + size * 0.46, box[1] - W * 0.05), (box[0] - W * 0.05, box[1] + size * 0.44)], fill=255)
+    band = ImageChops.multiply(band, frame).filter(ImageFilter.GaussianBlur(W * 0.006))
+    band_layer = Image.new("RGBA", (W, W), (255, 255, 255, 0))
+    band_layer.putalpha(band.point(lambda v: int(v * 0.55)))
+    img = Image.alpha_composite(img, band_layer)
+    # Second, softer band lower-right so it reads as metal, not a sticker.
+    band2 = Image.new("L", (W, W), 0)
+    ImageDraw.Draw(band2).polygon([(box[2] + W * 0.05, box[3] - size * 0.30), (box[2] - size * 0.24, box[3] + W * 0.05),
+                                   (box[2] - size * 0.34, box[3] + W * 0.05), (box[2] + W * 0.05, box[3] - size * 0.40)], fill=255)
+    band2 = ImageChops.multiply(band2, frame).filter(ImageFilter.GaussianBlur(W * 0.008))
+    band2_layer = Image.new("RGBA", (W, W), (255, 255, 255, 0))
+    band2_layer.putalpha(band2.point(lambda v: int(v * 0.30)))
+    img = Image.alpha_composite(img, band2_layer)
 
     # --- The edit inside: a play mark over a segmented timeline strip. ---
     inner_left = box[0] + thickness
@@ -123,7 +153,19 @@ def main():
     r = W * 0.012
     tri = tri.filter(ImageFilter.GaussianBlur(r)).point(lambda v: 255 if v > 128 else 0)
     tri = tri.filter(ImageFilter.GaussianBlur(SS * 0.6))
+    # Soft gold bloom behind the mark so it looks lit, not printed.
+    bloom = Image.new("RGBA", (W, W), (255, 200, 100, 0))
+    bloom.putalpha(tri.filter(ImageFilter.GaussianBlur(W * 0.03)).point(lambda v: int(v * 0.55)))
+    img = Image.alpha_composite(img, bloom)
     img = Image.alpha_composite(img, gradient_layer(tri, accent_top, accent_bottom, tcy - tri_h / 2, tcy + tri_h / 2))
+    # Specular highlight on the mark: a small bright band across its upper third.
+    spec = Image.new("L", (W, W), 0)
+    ImageDraw.Draw(spec).polygon([(icx - tri_w * 0.42, tcy - tri_h / 2), (icx + tri_w * 0.58, tcy),
+                                  (icx + tri_w * 0.20, tcy - tri_h * 0.10), (icx - tri_w * 0.42, tcy - tri_h * 0.10)], fill=255)
+    spec = ImageChops.multiply(spec, tri).filter(ImageFilter.GaussianBlur(W * 0.004))
+    spec_layer = Image.new("RGBA", (W, W), (255, 240, 200, 0))
+    spec_layer.putalpha(spec.point(lambda v: int(v * 0.35)))
+    img = Image.alpha_composite(img, spec_layer)
 
     # Timeline strip: five clip segments of different lengths, one gap wide, under the play mark.
     strip_y = inner_top + inner_h * 0.74
@@ -141,7 +183,7 @@ def main():
         sd.rounded_rectangle([x, strip_y - strip_h / 2, x + seg_w, strip_y + strip_h / 2], radius=strip_h * 0.35, fill=255)
         x += seg_w + gap
     strip = strip.filter(ImageFilter.GaussianBlur(SS * 0.6))
-    strip_layer = Image.new("RGBA", (W, W), (255, 248, 238, 0))
+    strip_layer = Image.new("RGBA", (W, W), (250, 236, 208, 0))
     strip_layer.putalpha(strip.point(lambda v: int(v * 0.92)))
     img = Image.alpha_composite(img, strip_layer)
 
@@ -154,6 +196,21 @@ def main():
     )
     ph = ph.filter(ImageFilter.GaussianBlur(SS * 0.6))
     img = Image.alpha_composite(img, gradient_layer(ph, accent_top, accent_bottom, strip_y - strip_h, strip_y + strip_h))
+
+    # --- Shine: a diagonal glossy sheen sweeping from top-left, over everything. ---
+    sheen = Image.new("L", (W, W), 0)
+    sd2 = ImageDraw.Draw(sheen)
+    sd2.polygon([(-W * 0.10, W * 0.05), (W * 0.62, -W * 0.10), (W * 0.30, W * 0.55), (-W * 0.10, W * 0.42)], fill=255)
+    sheen = sheen.filter(ImageFilter.GaussianBlur(W * 0.06))
+    sheen_layer = Image.new("RGBA", (W, W), (255, 246, 228, 0))
+    sheen_layer.putalpha(sheen.point(lambda v: int(v * 0.20)))
+    img = Image.alpha_composite(img, sheen_layer)
+    # A crisper top-edge highlight on the solid frame — the light catching the rim.
+    rim = ImageChops.subtract(frame, ImageChops.offset(frame, 0, int(W * 0.010)))
+    rim = rim.filter(ImageFilter.GaussianBlur(SS * 1.2))
+    rim_layer = Image.new("RGBA", (W, W), (255, 255, 250, 0))
+    rim_layer.putalpha(rim.point(lambda v: int(v * 0.9)))
+    img = Image.alpha_composite(img, rim_layer)
 
     out = img.convert("RGB").resize((S, S), Image.LANCZOS)
     out.save("AppIcon-1024.png", "PNG", optimize=True)
