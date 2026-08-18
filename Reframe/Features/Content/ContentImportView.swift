@@ -434,9 +434,13 @@ struct ContentImportView: View {
             if let id = model.content.musicAssetID, let track = model.assets[id] {
                 audioRow(
                     systemImage: "music.note", title: "Music", subtitle: track.displayName,
-                    detail: String(format: "%.0f seconds", track.duration)
+                    detail: model.isAnalyzingMusic
+                        ? "Finding the beat…"
+                        : (model.musicBeatGrid.map { String(format: "%.0f seconds · %.0f BPM — cuts will land on its beat", track.duration, $0.bpm.value) }
+                            ?? String(format: "%.0f seconds", track.duration))
                 ) {
                     model.content.musicAssetID = nil
+                    model.musicBeatGrid = nil
                     model.assets.remove(id: id)
                 }
             } else {
@@ -530,6 +534,7 @@ struct ContentImportView: View {
         model.assets.add(reference)
         model.content.musicAssetID = reference.id
         lastImportNote = nil
+        await model.analyzeMusic(reference)
     }
 
     // MARK: - Import

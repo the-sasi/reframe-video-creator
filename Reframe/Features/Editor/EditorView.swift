@@ -84,7 +84,7 @@ struct EditorView: View {
             TimelineView(
                 timeline: document.timeline,
                 assets: model.assets,
-                beatGrid: model.recipe?.beatGrid,
+                beatGrid: model.activeBeatGrid,
                 waveforms: waveforms,
                 currentTime: currentTime,
                 selection: selection,

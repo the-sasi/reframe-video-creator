@@ -51,6 +51,14 @@ final class AppModel {
     /// extracted *if the user asks*. Cleared when the flow ends. Analysis never reads it again.
     var referenceURL: URL?
 
+    /// Beat grid of the user's music, analysed with the same detector the reference went
+    /// through. Nil until a track has been added and analysed.
+    var musicBeatGrid: BeatGrid?
+    var isAnalyzingMusic = false
+
+    /// The grid the timeline snaps to: the user's music when there is one, else the reference's.
+    var activeBeatGrid: BeatGrid? { musicBeatGrid ?? recipe?.beatGrid }
+
     /// Identity of the project being edited.
     ///
     /// Deliberately *not* derived from `timeline.id`. `RecipeBinder` generates that
@@ -137,7 +145,48 @@ final class AppModel {
         fidelity = .closeMatch
         matchReferenceLook = false
         referenceURL = nil
+        musicBeatGrid = nil
         autosaveTask?.cancel()
+    }
+
+    // MARK: - Music analysis
+
+    /// Runs the beat detector over the user's music track. Called when a track is added; the
+    /// result persists with the project so it never runs twice for the same file.
+    func analyzeMusic(_ reference: AssetReference) async {
+        guard reference.kind == .audio else { return }
+        isAnalyzingMusic = true
+        defer { isAnalyzingMusic = false }
+        guard let resolved = await resolver.resolve(reference), let asset = resolved.asset else { return }
+        do {
+            guard let analysis = try await AudioAnalyzer().analyze(asset: asset), !analysis.beats.isEmpty else {
+                musicBeatGrid = nil
+                return
+            }
+            musicBeatGrid = BeatGrid(
+                bpm: Confident(analysis.bpm, confidence: analysis.bpmConfidence, basis: analysis.bpmBasis),
+                beats: analysis.beats,
+                downbeats: analysis.downbeats,
+                cutsAlignedToBeats: Confident(false, confidence: 1, basis: "user track — cuts snapped on request")
+            )
+            DiagnosticsLog.shared.info(
+                "audio", String(format: "music %@: %.1f BPM, %d beats", reference.displayName, analysis.bpm, analysis.beats.count)
+            )
+        } catch {
+            DiagnosticsLog.shared.warning("audio", "music analysis failed: \(error)")
+        }
+    }
+
+    /// Moves the timeline's cuts onto the music's beats. One undo step. Nil if nothing moved.
+    @discardableResult
+    func snapCutsToMusic() -> BeatRetimer.Result? {
+        guard let document, let grid = musicBeatGrid else { return nil }
+        guard let result = BeatRetimer.retime(document.timeline, toBeats: grid.beats) else { return nil }
+        document.perform(result.command)
+        DiagnosticsLog.shared.info(
+            "audio", String(format: "snapped %d cuts to music, mean shift %.0f ms", result.movedBoundaries, result.meanShift * 1000)
+        )
+        return result
     }
 
     /// Builds a timeline with no recipe — the "Start From Scratch" path.
@@ -279,6 +328,11 @@ final class AppModel {
             present(.renderSetupFailed(detail: "binder produced no timeline"))
             return
         }
+        // The reference cut on its beat and the user brought their own track: land the cuts on
+        // *their* beats. Undoable, so it is a default rather than a decree.
+        if recipe?.audio.suggestedCutStyle == .onBeat, musicBeatGrid != nil {
+            snapCutsToMusic()
+        }
         await saveProject()
         Haptics.success()
         path.append(.editor)
@@ -337,7 +391,8 @@ final class AppModel {
             assetFeatures: assetFeatures,
             fidelity: fidelity,
             isFavorite: projectIsFavorite,
-            thumbnailPath: projectThumbnailPath
+            thumbnailPath: projectThumbnailPath,
+            musicBeatGrid: musicBeatGrid
         )
         if projectCreatedAt == nil { projectCreatedAt = project.createdAt }
         do {
@@ -382,6 +437,7 @@ final class AppModel {
             assetFeatures = project.assetFeatures
             fidelity = project.fidelity
             exportSettings = project.exportSettings
+            musicBeatGrid = project.musicBeatGrid
             referenceURL = nil
 
             // A project can outlive its recipe — the user may have deleted the style. That is

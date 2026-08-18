@@ -37,7 +37,7 @@ struct AudioSheet: View {
                 addSection
                 if !videoClipsWithAudio.isEmpty { clipAudioSection }
                 mixSection
-                if let beatGrid = model.recipe?.beatGrid { rhythmSection(beatGrid) }
+                rhythmSection
                 if let note {
                     Section { Text(note).font(Theme.Font.caption).foregroundStyle(Theme.Palette.warning) }
                 }
@@ -261,14 +261,38 @@ struct AudioSheet: View {
         }
     }
 
-    private func rhythmSection(_ beatGrid: BeatGrid) -> some View {
-        Section {
-            LabeledContent("Reference tempo", value: "\(Int(beatGrid.bpm.value.rounded())) BPM")
-            LabeledContent("Cuts", value: beatGrid.cutsAlignedToBeats.value ? "on the beat" : "reference timing")
-        } header: {
-            Text("Rhythm")
-        } footer: {
-            Text("Scene lengths were taken from the reference's rhythm. A track at a similar tempo will feel tightest; the beat ticks on the timeline show where the reference's beats fell.")
+    @ViewBuilder
+    private var rhythmSection: some View {
+        if model.musicBeatGrid != nil || model.recipe?.beatGrid != nil {
+            Section {
+                if let reference = model.recipe?.beatGrid {
+                    LabeledContent("Reference tempo", value: "\(Int(reference.bpm.value.rounded())) BPM")
+                    LabeledContent("Reference cuts", value: reference.cutsAlignedToBeats.value ? "on the beat" : "own timing")
+                }
+                if let music = model.musicBeatGrid {
+                    LabeledContent("Your music", value: "\(Int(music.bpm.value.rounded())) BPM")
+                    let aligned = BeatRetimer.alignment(of: timeline, toBeats: music.beats)
+                    LabeledContent("Cuts on your beat", value: "\(Int((aligned * 100).rounded()))%")
+                    Button {
+                        if let result = model.snapCutsToMusic() {
+                            note = String(format: "Moved %d cuts onto the beat (about %.0f ms each).", result.movedBoundaries, result.meanShift * 1000)
+                        } else {
+                            note = "Every cut is already on the beat."
+                        }
+                        Haptics.success()
+                    } label: {
+                        Label("Snap cuts to my music", systemImage: "metronome")
+                    }
+                } else if model.isAnalyzingMusic {
+                    HStack { ProgressView().controlSize(.small); Text("Finding your track's beat…").font(Theme.Font.caption) }
+                }
+            } header: {
+                Text("Rhythm")
+            } footer: {
+                Text(model.musicBeatGrid != nil
+                     ? "The beat ticks on the timeline are your track's. Snapping moves each cut to the nearest beat within about a seventh of a second — one undo step."
+                     : "Scene lengths were taken from the reference's rhythm. Add a track and its beats appear on the timeline.")
+            }
         }
     }
 
@@ -323,5 +347,6 @@ struct AudioSheet: View {
         model.content.musicAssetID = reference.id
         addClip(asset: reference, role: .music, at: 0)
         note = nil
+        await model.analyzeMusic(reference)
     }
 }

@@ -50,7 +50,13 @@ public struct AudioAnalyzer: Sendable {
 
     public func analyze(source: MediaSource) async throws -> AudioAnalysis? {
         guard source.info.hasAudio else { return nil }
-        guard let decoded = try await AudioDecoder.decodeMono(asset: source.asset) else {
+        return try await analyze(asset: source.asset)
+    }
+
+    /// Any audio-bearing asset — a music file the user brought, say — through the same
+    /// pipeline, so their track gets the same beat grid the reference did.
+    public func analyze(asset: AVAsset) async throws -> AudioAnalysis? {
+        guard let decoded = try await AudioDecoder.decodeMono(asset: asset) else {
             return nil
         }
         let audio = AudioDecoder.normalized(decoded)

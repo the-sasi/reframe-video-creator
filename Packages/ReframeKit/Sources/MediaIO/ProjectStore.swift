@@ -22,6 +22,9 @@ public struct Project: Codable, Sendable, Identifiable {
     public var isFavorite: Bool
     /// Path of the poster frame inside the package's `thumbnails/`, if one has been rendered.
     public var thumbnailPath: String?
+    /// Beat grid of the user's music track, when one has been analysed. Drives timeline
+    /// snapping and "snap cuts to music".
+    public var musicBeatGrid: BeatGrid?
 
     public init(
         schemaVersion: Int = RecipeSchema.current,
@@ -38,7 +41,8 @@ public struct Project: Codable, Sendable, Identifiable {
         assetFeatures: [UUID: AssetFeatures] = [:],
         fidelity: BindingFidelity = .closeMatch,
         isFavorite: Bool = false,
-        thumbnailPath: String? = nil
+        thumbnailPath: String? = nil,
+        musicBeatGrid: BeatGrid? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -55,11 +59,13 @@ public struct Project: Codable, Sendable, Identifiable {
         self.fidelity = fidelity
         self.isFavorite = isFavorite
         self.thumbnailPath = thumbnailPath
+        self.musicBeatGrid = musicBeatGrid
     }
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, id, title, createdAt, modifiedAt, timeline, assets, content
         case assignment, recipeID, exportSettings, assetFeatures, fidelity, isFavorite, thumbnailPath
+        case musicBeatGrid
     }
 
     public init(from decoder: Decoder) throws {
@@ -79,6 +85,7 @@ public struct Project: Codable, Sendable, Identifiable {
         fidelity = try c.decodeIfPresent(BindingFidelity.self, forKey: .fidelity) ?? .closeMatch
         isFavorite = try c.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
         thumbnailPath = try c.decodeIfPresent(String.self, forKey: .thumbnailPath)
+        musicBeatGrid = try c.decodeIfPresent(BeatGrid.self, forKey: .musicBeatGrid)
     }
 }
 

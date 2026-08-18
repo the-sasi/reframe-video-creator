@@ -362,6 +362,31 @@ section("Variations: batched, undoable, idempotent") {
     check(decoded == EditVariation.punchy.command(for: bound)!, "batch command round-trips JSON")
 }
 
+section("Beat retimer: cuts move onto the new grid, one undo step") {
+    var timeline = Timeline(canvas: .reel1080)
+    timeline.clips = (0..<6).map { i in VideoClip(assetID: UUID(), start: Double(i), duration: 1.0) }
+    timeline.relayout()
+    let original = timeline
+    // 124 BPM grid: 0.4839 s apart, so 1.0 -> 0.968, 2.0 -> 1.935, 3.0 -> 2.903 ...
+    let period = 60.0 / 124.0
+    let beats = stride(from: 0.0, through: 7.0, by: period).map { $0 }
+    guard let result = BeatRetimer.retime(timeline, toBeats: beats, tolerance: 0.14) else {
+        check(false, "retimer produced a result"); return
+    }
+    check(result.movedBoundaries >= 4, "moved several boundaries (\(result.movedBoundaries))")
+    if case .batch(let name, _) = result.command { check(name == "Snap Cuts to Music", "named batch") } else { check(false, "batch") }
+    try result.command.apply(to: &timeline)
+    check(timeline.clips.count == 6 && timeline.clips.map(\.assetID) == original.clips.map(\.assetID), "clips intact")
+    let alignedAfter = BeatRetimer.alignment(of: timeline, toBeats: beats, tolerance: 0.04)
+    let alignedBefore = BeatRetimer.alignment(of: original, toBeats: beats, tolerance: 0.04)
+    check(alignedAfter > alignedBefore && alignedAfter >= 0.8, "alignment improved \(alignedBefore) -> \(alignedAfter)")
+    for clip in timeline.clips { check(clip.duration >= timeline.canvas.frameDuration * 3, "no clip collapsed") }
+    try result.command.revert(from: &timeline)
+    check(timeline == original, "reverts exactly")
+    // Already aligned -> nothing to do.
+    check(BeatRetimer.retime(timeline, toBeats: [0, 1, 2, 3, 4, 5, 6]) == nil, "no-op when already on grid")
+}
+
 section("Starter templates bind cleanly") {
     check(StarterTemplates.all.count >= 8, "have starters (\(StarterTemplates.all.count))")
     for recipe in StarterTemplates.all {

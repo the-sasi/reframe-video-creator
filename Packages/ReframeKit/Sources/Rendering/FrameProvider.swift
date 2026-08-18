@@ -425,7 +425,9 @@ final class PreviewVideoPlayer: @unchecked Sendable {
     func frame(at sourceTime: Double, playing: Bool) -> PixelBufferTextures.Held? {
         let target = CMTime(seconds: max(0, sourceTime), preferredTimescale: 600)
         let current = player.currentTime().seconds
-        let drift = abs(current - sourceTime)
+        // Before the item is ready `currentTime()` can be invalid (NaN); treat that as "far away"
+        // so the first request seeks rather than silently comparing against nothing.
+        let drift = current.isFinite ? abs(current - sourceTime) : Double.infinity
         let now = CACurrentMediaTime()
 
         if playing {
