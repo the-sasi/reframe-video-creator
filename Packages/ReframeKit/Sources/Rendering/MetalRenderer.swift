@@ -11,10 +11,16 @@ struct LayerUniforms {
     var grade: SIMD4<Float>
     /// vignette, grain, time, unused
     var effects: SIMD4<Float>
+    /// Upright-UV -> texture-UV, as (a, b, c, d); the translation rides in `sourceOffset`.
+    /// Identity for photos and text; a rotation for video decoded in its natural orientation.
+    var sourceTransform: SIMD4<Float>
+    /// Canvas-space point the rotation is about.
+    var pivot: SIMD2<Float>
+    var sourceOffset: SIMD2<Float>
     var opacity: Float
     var rotation: Float
     var scale: Float
-    var pad: Float = 0
+    var pad0: Float = 0
 }
 
 /// Mirrors `TransitionUniforms` in Shaders.metal.
@@ -29,11 +35,75 @@ struct TransitionUniforms {
 /// render call, which is what keeps the renderer itself synchronous and free of I/O.
 public struct RenderResources: @unchecked Sendable {
     public var assetTextures: [UUID: MTLTexture]
+    /// How to read each texture upright. Absent means identity. Video frames arrive in the
+    /// track's natural orientation — a portrait iPhone clip is a landscape buffer with a 90°
+    /// `preferredTransform` — and rotating in the shader is cheaper than an extra pass.
+    public var sourceTransforms: [UUID: SourceUVTransform]
     public var placeholder: MTLTexture?
 
-    public init(assetTextures: [UUID: MTLTexture] = [:], placeholder: MTLTexture? = nil) {
+    public init(
+        assetTextures: [UUID: MTLTexture] = [:],
+        sourceTransforms: [UUID: SourceUVTransform] = [:],
+        placeholder: MTLTexture? = nil
+    ) {
         self.assetTextures = assetTextures
+        self.sourceTransforms = sourceTransforms
         self.placeholder = placeholder
+    }
+}
+
+/// Affine map from upright, normalised source coordinates to the texture's own UV space.
+///
+/// `uvTexture = (a·u + c·v + tx, b·u + d·v + ty)`. Built once per asset from the track's
+/// `preferredTransform`; identity for stills, which ImageIO and PhotoKit already hand over
+/// upright.
+public struct SourceUVTransform: Sendable, Hashable {
+    public var a: Double, b: Double, c: Double, d: Double, tx: Double, ty: Double
+
+    public init(a: Double, b: Double, c: Double, d: Double, tx: Double, ty: Double) {
+        self.a = a; self.b = b; self.c = c; self.d = d; self.tx = tx; self.ty = ty
+    }
+
+    public static let identity = SourceUVTransform(a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0)
+
+    /// The pixel dimensions of the *upright* image, given the texture's natural dimensions.
+    /// A 90° transform swaps them.
+    public func uprightSize(textureWidth: Int, textureHeight: Int) -> (width: Int, height: Int) {
+        let swaps = abs(a) < 0.5 && abs(d) < 0.5
+        return swaps ? (textureHeight, textureWidth) : (textureWidth, textureHeight)
+    }
+
+    /// From an AVFoundation `preferredTransform` (natural pixel space -> presented pixel space)
+    /// and the natural pixel size. Inverts it and normalises both spaces to 0…1.
+    public static func fromPreferredTransform(
+        a: Double, b: Double, c: Double, d: Double, tx: Double, ty: Double,
+        naturalWidth: Double, naturalHeight: Double
+    ) -> SourceUVTransform {
+        guard naturalWidth > 0, naturalHeight > 0 else { return .identity }
+        // Presented size is the natural rect pushed through the transform.
+        let presentedWidth = abs(a * naturalWidth + c * naturalHeight)
+        let presentedHeight = abs(b * naturalWidth + d * naturalHeight)
+        guard presentedWidth > 0, presentedHeight > 0 else { return .identity }
+
+        // Invert the 2×2.
+        let det = a * d - b * c
+        guard abs(det) > 1e-9 else { return .identity }
+        let ia = d / det, ib = -b / det, ic = -c / det, id = a / det
+        // Inverse translation: -T⁻¹ * t. Presented pixel coordinates are (0…presentedWidth),
+        // but a rotated transform's tx/ty is what shifts the rotated frame back into view.
+        let itx = -(ia * tx + ic * ty)
+        let ity = -(ib * tx + id * ty)
+
+        // Compose: uv_presented -> pixel_presented (× presented size) -> pixel_natural (T⁻¹)
+        // -> uv_natural (÷ natural size).
+        return SourceUVTransform(
+            a: ia * presentedWidth / naturalWidth,
+            b: ib * presentedWidth / naturalHeight,
+            c: ic * presentedHeight / naturalWidth,
+            d: id * presentedHeight / naturalHeight,
+            tx: itx / naturalWidth,
+            ty: ity / naturalHeight
+        )
     }
 }
 
@@ -137,6 +207,12 @@ public final class MetalRenderer: @unchecked Sendable {
                 throw ReframeError.renderSetupFailed(detail: "makeCommandBuffer returned nil")
             }
 
+            // Scratch textures borrowed for this frame. Returned to the pool only once the GPU
+            // has finished with them: releasing them at the end of encoding, as an earlier
+            // version did, let the *next* preview frame reuse a texture the previous frame's
+            // transition was still reading -- a flicker that only showed during dissolves.
+            var borrowed: [MTLTexture] = []
+
             switch plan.stage {
             case .single(let layers):
                 try encode(
@@ -148,7 +224,7 @@ public final class MetalRenderer: @unchecked Sendable {
             case .transition(let stage):
                 try encodeTransition(
                     stage, plan: plan, resources: resources,
-                    into: target, commandBuffer: commandBuffer
+                    into: target, commandBuffer: commandBuffer, borrowed: &borrowed
                 )
             }
 
@@ -158,6 +234,14 @@ public final class MetalRenderer: @unchecked Sendable {
                     into: target, clear: nil,
                     commandBuffer: commandBuffer
                 )
+            }
+
+            if !borrowed.isEmpty {
+                let pool = self.pool
+                let box = BorrowedTextures(textures: borrowed)
+                commandBuffer.addCompletedHandler { _ in
+                    for texture in box.textures { pool.release(texture) }
+                }
             }
 
             commandBuffer.commit()
@@ -172,17 +256,16 @@ public final class MetalRenderer: @unchecked Sendable {
         plan: RenderPlan,
         resources: RenderResources,
         into target: MTLTexture,
-        commandBuffer: MTLCommandBuffer
+        commandBuffer: MTLCommandBuffer,
+        borrowed: inout [MTLTexture]
     ) throws {
         let width = target.width
         let height = target.height
 
         let fromTexture = try pool.acquire(width: width, height: height)
         let toTexture = try pool.acquire(width: width, height: height)
-        defer {
-            pool.release(fromTexture)
-            pool.release(toTexture)
-        }
+        borrowed.append(fromTexture)
+        borrowed.append(toTexture)
 
         try encode(
             layers: stage.from, plan: plan, resources: resources,
@@ -195,8 +278,6 @@ public final class MetalRenderer: @unchecked Sendable {
 
         var sourceA = fromTexture
         var sourceB = toTexture
-        var blurredA: MTLTexture?
-        var blurredB: MTLTexture?
 
         // The blur transition pre-filters both scenes with MPS, so the shader stays a plain
         // crossfade. If MPS is unavailable it degrades to dissolve, which is what
@@ -207,17 +288,13 @@ public final class MetalRenderer: @unchecked Sendable {
                 let blur = MPSImageGaussianBlur(device: device, sigma: radius)
                 let a = try pool.acquire(width: width, height: height)
                 let b = try pool.acquire(width: width, height: height)
+                borrowed.append(a)
+                borrowed.append(b)
                 blur.encode(commandBuffer: commandBuffer, sourceTexture: fromTexture, destinationTexture: a)
                 blur.encode(commandBuffer: commandBuffer, sourceTexture: toTexture, destinationTexture: b)
-                blurredA = a
-                blurredB = b
                 sourceA = a
                 sourceB = b
             }
-        }
-        defer {
-            blurredA.map(pool.release)
-            blurredB.map(pool.release)
         }
 
         let descriptor = MTLRenderPassDescriptor()
@@ -276,14 +353,31 @@ public final class MetalRenderer: @unchecked Sendable {
         for layer in layers {
             switch layer.content {
             case .asset(let id, _):
+                let isReal = resources.assetTextures[id] != nil
                 guard let texture = resources.assetTextures[id] ?? resources.placeholder else {
                     continue
                 }
+                var destination = layer.destination
+                let sourceTransform = resources.sourceTransforms[id] ?? .identity
+                if layer.fitToDestination, isReal {
+                    let upright = sourceTransform.uprightSize(
+                        textureWidth: texture.width, textureHeight: texture.height
+                    )
+                    destination = Self.aspectFit(
+                        textureWidth: upright.width, textureHeight: upright.height,
+                        into: layer.destination, canvas: plan.canvas
+                    )
+                }
+                // Overlays (logos) are already the colour they should be; grading them would
+                // tint the user's brand. Everything else takes the graded path.
+                let isOverlay = layer.grade.isNeutral && layer.vignette == 0 && layer.grain == 0
+                    && layer.destination != .full
                 draw(
-                    texture: texture, layer: layer, pipeline: layerPipeline,
-                    sourceCrop: layer.sourceCrop, destination: layer.destination,
+                    texture: texture, layer: layer, pipeline: isOverlay ? overlayPipeline : layerPipeline,
+                    sourceCrop: layer.sourceCrop, destination: destination,
                     opacity: layer.opacity, scale: layer.scale,
-                    time: plan.time, encoder: encoder
+                    time: plan.time, canvasAspect: plan.canvas.aspectRatio,
+                    sourceTransform: sourceTransform, encoder: encoder
                 )
 
             case .placeholder:
@@ -291,25 +385,49 @@ public final class MetalRenderer: @unchecked Sendable {
                 draw(
                     texture: texture, layer: layer, pipeline: layerPipeline,
                     sourceCrop: .full, destination: layer.destination,
-                    opacity: layer.opacity, scale: layer.scale, encoder: encoder
+                    opacity: layer.opacity, scale: layer.scale, canvasAspect: plan.canvas.aspectRatio, encoder: encoder
                 )
 
             case .text(let draw):
                 guard let rasterized = textRasterizer.rasterize(draw, canvas: plan.canvas) else {
                     continue
                 }
+                let style = draw.style
+                let pivot = SIMD2<Double>(rasterized.blockCenter.x, rasterized.blockCenter.y)
+                let layerOpacity = layer.opacity * style.opacity
+                var rotated = layer
+                rotated.rotation = style.rotation
+                rotated.rotationPivot = pivot
+
+                // Backgrounds first, faded with the most-visible word on their line so a pill
+                // appears with its first word rather than sitting empty ahead of the reveal.
+                for background in rasterized.backgrounds {
+                    var lineAlpha = 0.0
+                    for (index, word) in draw.words.enumerated()
+                    where rasterized.lineOfWord[index] == background.index {
+                        lineAlpha = max(lineAlpha, word.opacity)
+                    }
+                    guard lineAlpha > 0.001 else { continue }
+                    self.draw(
+                        texture: background.texture, layer: rotated, pipeline: overlayPipeline,
+                        sourceCrop: .full, destination: background.rect,
+                        opacity: lineAlpha * layerOpacity, scale: 1,
+                        canvasAspect: plan.canvas.aspectRatio, encoder: encoder
+                    )
+                }
+
                 // One quad per word. Per-word animation is applied here rather than baked into
                 // the texture, which is why the rasteriser cache survives the whole reveal.
-                for (index, piece) in rasterized.pieces.enumerated() {
-                    guard index < draw.words.count else { break }
-                    let word = draw.words[index]
+                for piece in rasterized.words {
+                    guard piece.index < draw.words.count else { continue }
+                    let word = draw.words[piece.index]
                     guard word.opacity > 0.001 else { continue }
                     let destination = piece.rect.offset(dx: 0, dy: word.offsetY)
                     self.draw(
-                        texture: piece.texture, layer: layer, pipeline: overlayPipeline,
+                        texture: piece.texture, layer: rotated, pipeline: overlayPipeline,
                         sourceCrop: .full, destination: destination,
-                        opacity: word.opacity * layer.opacity, scale: word.scale,
-                        encoder: encoder
+                        opacity: word.opacity * layerOpacity, scale: word.scale,
+                        canvasAspect: plan.canvas.aspectRatio, encoder: encoder
                     )
                 }
 
@@ -332,11 +450,14 @@ public final class MetalRenderer: @unchecked Sendable {
         opacity: Double,
         scale: Double,
         time: Double = 0,
+        canvasAspect: Double = 1,
+        sourceTransform: SourceUVTransform = .identity,
         encoder: MTLRenderCommandEncoder
     ) {
         encoder.setRenderPipelineState(pipeline)
         encoder.setFragmentTexture(texture, index: 0)
 
+        let pivot = layer.rotationPivot ?? SIMD2<Double>(destination.centerX, destination.centerY)
         var uniforms = LayerUniforms(
             destination: SIMD4<Float>(
                 Float(destination.x), Float(destination.y),
@@ -351,8 +472,14 @@ public final class MetalRenderer: @unchecked Sendable {
                 Float(layer.grade.saturation), Float(layer.grade.temperature)
             ),
             effects: SIMD4<Float>(
-                Float(layer.vignette), Float(layer.grain), Float(time), 0
+                Float(layer.vignette), Float(layer.grain), Float(time), Float(canvasAspect)
             ),
+            sourceTransform: SIMD4<Float>(
+                Float(sourceTransform.a), Float(sourceTransform.b),
+                Float(sourceTransform.c), Float(sourceTransform.d)
+            ),
+            pivot: SIMD2<Float>(Float(pivot.x), Float(pivot.y)),
+            sourceOffset: SIMD2<Float>(Float(sourceTransform.tx), Float(sourceTransform.ty)),
             opacity: Float(opacity),
             rotation: Float(layer.rotation),
             scale: Float(scale)
@@ -362,6 +489,32 @@ public final class MetalRenderer: @unchecked Sendable {
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
+    /// The largest rect with the texture's aspect ratio that fits inside `destination`, centred.
+    /// Aspect is compared in *pixels*: destination is normalised against a non-square canvas.
+    static func aspectFit(
+        textureWidth: Int, textureHeight: Int, into destination: NormalizedRect, canvas: CanvasSpec
+    ) -> NormalizedRect {
+        guard textureWidth > 0, textureHeight > 0 else { return destination }
+        let destinationPixelWidth = destination.width * Double(canvas.width)
+        let destinationPixelHeight = destination.height * Double(canvas.height)
+        guard destinationPixelWidth > 0, destinationPixelHeight > 0 else { return destination }
+        let textureAspect = Double(textureWidth) / Double(textureHeight)
+        let destinationAspect = destinationPixelWidth / destinationPixelHeight
+
+        var width = destination.width
+        var height = destination.height
+        if textureAspect > destinationAspect {
+            height = destination.width * Double(canvas.width) / textureAspect / Double(canvas.height)
+        } else {
+            width = destination.height * Double(canvas.height) * textureAspect / Double(canvas.width)
+        }
+        return NormalizedRect(
+            x: destination.centerX - width / 2,
+            y: destination.centerY - height / 2,
+            width: width, height: height
+        )
+    }
+
     // MARK: - Memory
 
     /// Called from the app's memory-pressure hook. Drops everything regenerable.
@@ -369,6 +522,13 @@ public final class MetalRenderer: @unchecked Sendable {
         textRasterizer.evictAll()
         pool.drain()
     }
+}
+
+/// Carries scratch textures into a command buffer's completion handler. `MTLTexture` is not
+/// `Sendable`; the textures are not touched again until the GPU is done with them, which is
+/// exactly when the handler runs.
+private struct BorrowedTextures: @unchecked Sendable {
+    let textures: [MTLTexture]
 }
 
 /// Recycles textures by size so steady-state export allocates nothing.

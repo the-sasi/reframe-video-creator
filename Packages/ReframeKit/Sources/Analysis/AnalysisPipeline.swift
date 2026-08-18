@@ -135,6 +135,19 @@ public actor AnalysisPipeline {
                 + ", audio=\(source.info.hasAudio)"
         )
 
+        // Audio is independent of every visual stage, so it runs alongside them from the
+        // start rather than waiting its turn — on a 30 s reference that takes it off the
+        // critical path entirely.
+        update(.listenAudio, .running(fraction: nil))
+        let audioTask = Task.detached(priority: .userInitiated) { [audioAnalyzer] in
+            try await PerformanceLog.measure("listenAudio") {
+                try await audioAnalyzer.analyze(source: source)
+            }
+        }
+        // Detached tasks are not children: cancelling the analysis would otherwise leave them
+        // decoding in the background after the screen has gone.
+        defer { audioTask.cancel() }
+
         // 2. Scenes
         update(.detectScenes, .running(fraction: 0))
         let (metrics, thumbs) = try await PerformanceLog.measure("detectScenes") {
@@ -148,13 +161,30 @@ public actor AnalysisPipeline {
         )
         var shots = sceneDetector.shots(from: boundaries, duration: source.info.duration)
 
-        guard shots.count > 1 else {
-            update(.detectScenes, .failed)
-            throw ReframeError.noScenesDetected
+        // A single continuous shot is a legitimate reference — a talking head, a one-take
+        // product clip. There is less structure to learn, but the duration, motion, text and
+        // audio are all still there. Refusing it (which an earlier version did) threw away the
+        // whole talking-head category for no reason.
+        if shots.count == 1 {
+            DiagnosticsLog.shared.warning("analysis", "single continuous shot — one-slot recipe")
         }
-        update(.detectScenes, .done(summary: "\(shots.count) scenes"))
+        update(.detectScenes, .done(summary: shots.count == 1 ? "1 continuous shot" : "\(shots.count) scenes"))
 
-        // 3. Motion, saliency and palette — one pass per shot.
+        // 3. Text runs concurrently with motion. Both decode the reference, but text reads it
+        // at 720 px on a stride while motion seeks per shot; neither contends with the other
+        // for the GPU the way two optical-flow passes would.
+        update(.readText, .running(fraction: 0))
+        let textTask = Task.detached(priority: .userInitiated) { [textAnalyzer, weak self] in
+            try await PerformanceLog.measure("readText") {
+                try await textAnalyzer.analyze(source: source) { done, total in
+                    guard let self else { return }
+                    Task { await self.update(.readText, .running(fraction: Double(done) / Double(max(1, total)))) }
+                }
+            }
+        }
+        defer { textTask.cancel() }
+
+        // 4. Motion, saliency and palette — one pass per shot.
         update(.trackMotion, .running(fraction: 0))
         var scenePalettes: [Int: ScenePalette] = [:]
         try await PerformanceLog.measure("trackMotion") {
@@ -163,6 +193,7 @@ public actor AnalysisPipeline {
                 if let visuals = await shotAnalyzer.analyze(shot: shots[index], source: source) {
                     shots[index].motion = visuals.motion
                     shots[index].salientAreaFraction = visuals.salientAreaFraction
+                    shots[index].subjectRect = visuals.subjectRect
                     shots[index].motionEnergy = motionEnergy(visuals.motion)
                     scenePalettes[index] = visuals.palette
                 }
@@ -173,15 +204,23 @@ public actor AnalysisPipeline {
             }
         }
         let namedMoves = shots.compactMap(\.motion).filter { $0.kind != .none }.count
-        update(.trackMotion, .done(summary: "\(namedMoves) camera moves"))
+        update(.trackMotion, .done(summary: namedMoves == 0 ? "static shots" : "\(namedMoves) camera moves"))
 
-        // 4. Text
-        update(.readText, .running(fraction: 0))
-        let textTracks = try await PerformanceLog.measure("readText") {
-            try await textAnalyzer.analyze(source: source) { [weak self] done, total in
-                guard let self else { return }
-                Task { await self.update(.readText, .running(fraction: Double(done) / Double(max(1, total)))) }
-            }
+        // 5. Collect text and audio.
+        let textTracks: [DetectedTextTrack]
+        do {
+            textTracks = try await textTask.value
+        } catch is CancellationError {
+            throw ReframeError.analysisCancelled
+        } catch let error as ReframeError {
+            if case .analysisCancelled = error { throw error }
+            // OCR failing must not sink the whole analysis; a recipe without text slots is
+            // still a recipe. Log and carry on.
+            DiagnosticsLog.shared.warning("analysis", "text stage failed, continuing: \(error.logDetail)")
+            textTracks = []
+        } catch {
+            DiagnosticsLog.shared.warning("analysis", "text stage failed, continuing: \(error)")
+            textTracks = []
         }
         let usableText = textTracks.filter { !$0.isLikelyWatermark }
         let droppedWatermarks = textTracks.count - usableText.count
@@ -195,16 +234,27 @@ public actor AnalysisPipeline {
             )
         )
 
-        // 5. Audio
-        update(.listenAudio, .running(fraction: nil))
-        let audio = try await PerformanceLog.measure("listenAudio") {
-            try await audioAnalyzer.analyze(source: source)
+        let audio: AudioAnalysis?
+        do {
+            audio = try await audioTask.value
+        } catch is CancellationError {
+            throw ReframeError.analysisCancelled
+        } catch let error as ReframeError {
+            if case .analysisCancelled = error { throw error }
+            DiagnosticsLog.shared.warning("analysis", "audio stage failed, continuing: \(error.logDetail)")
+            audio = nil
+        } catch {
+            DiagnosticsLog.shared.warning("analysis", "audio stage failed, continuing: \(error)")
+            audio = nil
         }
         update(
             .listenAudio,
             .done(
-                summary: audio.map { "\(Int($0.bpm.rounded())) BPM · \($0.beats.count) beats" }
-                    ?? "no audio"
+                summary: audio.map {
+                    $0.hasSpeech
+                        ? "\(Int($0.bpm.rounded())) BPM · speech"
+                        : "\(Int($0.bpm.rounded())) BPM · \($0.beats.count) beats"
+                } ?? "no audio"
             )
         )
 

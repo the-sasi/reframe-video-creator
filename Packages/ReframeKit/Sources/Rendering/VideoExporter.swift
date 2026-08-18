@@ -124,17 +124,23 @@ public actor VideoExporter {
         )
 
         // Audio input must be added before `startWriting`, so it is set up here even though it
-        // is not written until the video is done.
+        // is not written until the video is done. The mix is built from the same plan the
+        // preview plays, so what was heard is what gets written.
         var audioInput: AVAssetWriterInput?
-        let audioClip = timeline.audio.first
-        if audioClip != nil {
-            let input = AVAssetWriterInput(
-                mediaType: .audio, outputSettings: Self.audioSettings()
-            )
-            input.expectsMediaDataInRealTime = false
-            if writer.canAdd(input) {
-                writer.add(input)
-                audioInput = input
+        let mixPlan = AudioMixPlanner().plan(timeline, assets: request.assets)
+        var mixComposition: AudioMixComposition?
+        if !mixPlan.isEmpty {
+            let built = await AudioMixBuilder.build(plan: mixPlan, resolver: resolver, assets: request.assets)
+            if !built.isEmpty {
+                mixComposition = built
+                let input = AVAssetWriterInput(
+                    mediaType: .audio, outputSettings: Self.audioSettings()
+                )
+                input.expectsMediaDataInRealTime = false
+                if writer.canAdd(input) {
+                    writer.add(input)
+                    audioInput = input
+                }
             }
         }
 
@@ -236,14 +242,10 @@ public actor VideoExporter {
         await frameProvider.finish()
 
         // --- Audio ---
-        if let audioInput, let audioClip,
-           let reference = request.assets[audioClip.assetID] {
+        if let audioInput, let mixComposition {
             progress(ExportProgress(phase: .addingAudio, fraction: nil))
             do {
-                try await writeAudio(
-                    clip: audioClip, reference: reference,
-                    input: audioInput, resolver: resolver
-                )
+                try await writeAudio(mix: mixComposition, input: audioInput, upTo: duration)
             } catch {
                 // A silent video is a far better outcome than a failed export. The user is told
                 // in the completion state rather than by losing the render.
@@ -277,31 +279,24 @@ public actor VideoExporter {
 
     // MARK: - Audio
 
-    /// Reads the user's audio, applies the clip's gain envelope in place, and appends.
+    /// Reads the mixed audio through `AVAssetReaderAudioMixOutput` and appends it as-is.
     ///
-    /// Mutating the reader's own buffer (safe because `alwaysCopiesSampleData` is true) avoids
-    /// constructing sample buffers by hand, which is the fiddliest part of AVFoundation and the
-    /// easiest place to get timing subtly wrong.
+    /// The composition's timeline *is* the project timeline, so sample timestamps need no
+    /// retiming, and every fade, duck and volume is applied by AVFoundation from the same
+    /// `AVAudioMix` the preview player uses. Nothing here touches sample data.
     private func writeAudio(
-        clip: AudioClip,
-        reference: AssetReference,
+        mix: AudioMixComposition,
         input: AVAssetWriterInput,
-        resolver: AssetResolver
+        upTo duration: Double
     ) async throws {
-        guard let resolved = await resolver.resolve(reference), let asset = resolved.asset,
-              let track = try await asset.loadTracks(withMediaType: .audio).first else {
-            return
-        }
-
-        let reader = try AVAssetReader(asset: asset)
+        let reader = try AVAssetReader(asset: mix.composition)
         reader.timeRange = CMTimeRange(
-            start: CMTime(seconds: clip.sourceStart, preferredTimescale: 600),
-            duration: CMTime(seconds: clip.duration, preferredTimescale: 600)
+            start: .zero,
+            duration: CMTime(seconds: duration, preferredTimescale: 44_100)
         )
-
-        let output = AVAssetReaderTrackOutput(
-            track: track,
-            outputSettings: [
+        let output = AVAssetReaderAudioMixOutput(
+            audioTracks: mix.composition.tracks(withMediaType: .audio),
+            audioSettings: [
                 AVFormatIDKey: kAudioFormatLinearPCM,
                 AVSampleRateKey: 44_100.0,
                 AVNumberOfChannelsKey: 2,
@@ -311,72 +306,28 @@ public actor VideoExporter {
                 AVLinearPCMIsNonInterleaved: false,
             ]
         )
-        output.alwaysCopiesSampleData = true
-        guard reader.canAdd(output) else { return }
+        output.audioMix = mix.audioMix
+        output.alwaysCopiesSampleData = false
+        guard reader.canAdd(output) else {
+            throw ReframeError.exportFailed(detail: "reader rejected audio mix output")
+        }
         reader.add(output)
-        guard reader.startReading() else { return }
+        guard reader.startReading() else {
+            throw ReframeError.exportFailed(detail: reader.error?.localizedDescription ?? "audio startReading failed")
+        }
         defer { reader.cancelReading() }
-
-        // Shift source time to timeline time.
-        let timeOffset = clip.start - clip.sourceStart
 
         while let sample = output.copyNextSampleBuffer() {
             try Task.checkCancellation()
-
             while !input.isReadyForMoreMediaData {
                 try await Task.sleep(for: .milliseconds(4))
             }
-
-            let sourcePTS = CMSampleBufferGetPresentationTimeStamp(sample).seconds
-            let timelineTime = sourcePTS + timeOffset
-            guard timelineTime < clip.end else { break }
-
-            applyGain(to: sample, clip: clip, startingAtTimelineTime: timelineTime)
-
-            let retimed: CMSampleBuffer
-            if abs(timeOffset) < 1e-6 {
-                retimed = sample
-            } else {
-                var timing = CMSampleTimingInfo(
-                    duration: CMSampleBufferGetDuration(sample),
-                    presentationTimeStamp: CMTime(seconds: timelineTime, preferredTimescale: 44_100),
-                    decodeTimeStamp: .invalid
-                )
-                var copy: CMSampleBuffer?
-                guard CMSampleBufferCreateCopyWithNewTiming(
-                    allocator: kCFAllocatorDefault, sampleBuffer: sample,
-                    sampleTimingEntryCount: 1, sampleTimingArray: &timing,
-                    sampleBufferOut: &copy
-                ) == noErr, let copy else { continue }
-                retimed = copy
+            guard input.append(sample) else {
+                throw ReframeError.exportFailed(detail: "audio append failed")
             }
-
-            input.append(retimed)
         }
-    }
-
-    /// Scales interleaved stereo float samples by the clip's fade envelope, in place.
-    private func applyGain(to sample: CMSampleBuffer, clip: AudioClip, startingAtTimelineTime start: Double) {
-        guard let blockBuffer = CMSampleBufferGetDataBuffer(sample) else { return }
-
-        var length = 0
-        var dataPointer: UnsafeMutablePointer<Int8>?
-        guard CMBlockBufferGetDataPointer(
-            blockBuffer, atOffset: 0, lengthAtOffsetOut: nil,
-            totalLengthOut: &length, dataPointerOut: &dataPointer
-        ) == kCMBlockBufferNoErr, let dataPointer else { return }
-
-        let floatCount = length / MemoryLayout<Float>.size
-        let framesCount = floatCount / 2
-        guard framesCount > 0 else { return }
-
-        dataPointer.withMemoryRebound(to: Float.self, capacity: floatCount) { pointer in
-            for frame in 0..<framesCount {
-                let time = start + Double(frame) / 44_100.0
-                let gain = Float(clip.gain(at: time))
-                pointer[frame * 2] *= gain
-                pointer[frame * 2 + 1] *= gain
-            }
+        if reader.status == .failed {
+            throw ReframeError.exportFailed(detail: reader.error?.localizedDescription ?? "audio read failed")
         }
     }
 
@@ -388,11 +339,9 @@ public actor VideoExporter {
         // Apple's own patent licences on Apple hardware — which is a large part of why this
         // project has no FFmpeg in it.
         let codec: AVVideoCodecType = settings.preferHEVC ? .hevc : .h264
-        let pixels = Double(settings.width * settings.height * settings.fps)
-        let bitrate = Int(pixels * (settings.preferHEVC ? 0.09 : 0.14))
 
         var compression: [String: Any] = [
-            AVVideoAverageBitRateKey: bitrate,
+            AVVideoAverageBitRateKey: settings.bitrate,
             AVVideoExpectedSourceFrameRateKey: settings.fps,
             AVVideoMaxKeyFrameIntervalKey: settings.fps * 2,
         ]

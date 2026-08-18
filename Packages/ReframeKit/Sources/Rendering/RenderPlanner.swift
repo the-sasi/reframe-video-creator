@@ -16,7 +16,7 @@ public struct RenderPlanner: Sendable {
         return RenderPlan(
             canvas: timeline.canvas,
             time: time,
-            background: SIMD4<Float>(0, 0, 0, 1),
+            background: .fromHex(timeline.backgroundHex),
             stage: stage,
             overlays: overlays
         )
@@ -109,18 +109,24 @@ public struct RenderPlanner: Sendable {
             ]
         }
 
+        // `.fit` letterboxes: the whole source is shown inside a destination rect with the
+        // source's aspect. The renderer does not know source dimensions, so the frame provider
+        // supplies them via `RenderResources.assetAspects`; the planner emits a full-canvas
+        // destination and a `fitSourceAspect` hint, and the renderer shrinks the quad. That
+        // keeps this function pure while still letting fit mode work for any asset.
         return [
             RenderPlan.PlanLayer(
                 content: .asset(
                     id: assetID,
                     sourceTime: clip.sourceTime(atLocalTime: localTime)
                 ),
-                sourceCrop: clip.crop(atLocalTime: localTime),
+                sourceCrop: clip.fitMode == .fit ? .full : clip.crop(atLocalTime: localTime),
                 destination: .full,
                 opacity: clip.opacity,
                 grade: clip.grade,
                 vignette: clip.vignette,
-                grain: clip.grain
+                grain: clip.grain,
+                fitToDestination: clip.fitMode == .fit
             )
         ]
     }
@@ -137,7 +143,8 @@ public struct RenderPlanner: Sendable {
                     content: .asset(id: overlay.assetID, sourceTime: 0),
                     sourceCrop: .full,
                     destination: overlay.frame,
-                    opacity: overlay.opacity
+                    opacity: overlay.opacity,
+                    fitToDestination: true
                 )
             )
         }
@@ -159,10 +166,8 @@ public struct RenderPlanner: Sendable {
 
     /// Resolves a text layer's animation state into per-word alpha, offset and scale.
     func textDraw(for layer: TextLayer, at time: Double) -> TextDraw? {
-        let words = layer.text
-            .split(separator: " ", omittingEmptySubsequences: true)
-            .map(String.init)
-        guard !words.isEmpty else { return nil }
+        let words = layer.displayWords
+        guard words.contains(where: { $0 != TextLayer.lineBreakMarker }) else { return nil }
 
         let local = time - layer.start
         let remaining = layer.end - time
@@ -186,50 +191,72 @@ public struct RenderPlanner: Sendable {
             break
         }
 
-        let drawWords: [TextDraw.Word] = words.enumerated().map { index, word in
+        // Words with their own timings (captions) reveal on schedule and ignore the entry
+        // animation — the timing *is* the animation.
+        let realWordCount = words.filter { $0 != TextLayer.lineBreakMarker }.count
+        let timings: [Double]? = {
+            guard let t = layer.wordTimings, t.count == realWordCount else { return nil }
+            return t
+        }()
+
+        var realIndex = -1
+        let drawWords: [TextDraw.Word] = words.map { word in
+            if word == TextLayer.lineBreakMarker {
+                return TextDraw.Word(text: "", opacity: 0, offsetY: 0, scale: 1, isLineBreak: true)
+            }
+            realIndex += 1
+            let index = realIndex
+
             var alpha = 1.0
             var offsetY = 0.0
             var scale = 1.0
 
-            switch layer.entry {
-            case .none:
-                break
+            if let timings {
+                let wordStart = timings[index]
+                // A quick 90 ms fade per word so captions do not strobe.
+                alpha = min(1, max(0, (local - wordStart) / 0.09))
+                scale = 0.96 + alpha * 0.04
+            } else {
+                switch layer.entry {
+                case .none:
+                    break
 
-            case .fadeIn:
-                if entryDuration > 0, local < entryDuration {
-                    alpha = min(1, max(0, local / entryDuration))
+                case .fadeIn:
+                    if entryDuration > 0, local < entryDuration {
+                        alpha = min(1, max(0, local / entryDuration))
+                    }
+
+                case .popIn:
+                    if entryDuration > 0, local < entryDuration {
+                        let t = min(1, max(0, local / entryDuration))
+                        alpha = t
+                        // Overshoot then settle. A linear scale-up reads as a zoom; the overshoot
+                        // is what makes it read as a pop.
+                        scale = t < 0.7 ? 0.8 + t * 0.35 : 1.06 - (t - 0.7) * 0.2
+                    }
+
+                case .slideUp, .slideDown:
+                    if entryDuration > 0, local < entryDuration {
+                        let t = Easing.easeOut.apply(min(1, max(0, local / entryDuration)))
+                        alpha = t
+                        offsetY = (1 - t) * (layer.entry == .slideUp ? 0.06 : -0.06)
+                    }
+
+                case .wordByWord:
+                    // Stagger across the entry window, leaving each word a fade of its own.
+                    let perWord = entryDuration / Double(max(1, realWordCount))
+                    let wordStart = Double(index) * perWord
+                    let fade = max(0.08, perWord * 0.8)
+                    alpha = min(1, max(0, (local - wordStart) / fade))
+                    scale = 0.94 + alpha * 0.06
+
+                case .typeOn:
+                    // Approximated at word granularity. Genuine per-character typing would need
+                    // per-glyph rasterisation, which is a lot of texture churn for an effect that
+                    // reads almost identically at 30 fps.
+                    let perWord = entryDuration / Double(max(1, realWordCount))
+                    alpha = local >= Double(index) * perWord ? 1 : 0
                 }
-
-            case .popIn:
-                if entryDuration > 0, local < entryDuration {
-                    let t = min(1, max(0, local / entryDuration))
-                    alpha = t
-                    // Overshoot then settle. A linear scale-up reads as a zoom; the overshoot
-                    // is what makes it read as a pop.
-                    scale = t < 0.7 ? 0.8 + t * 0.35 : 1.06 - (t - 0.7) * 0.2
-                }
-
-            case .slideUp, .slideDown:
-                if entryDuration > 0, local < entryDuration {
-                    let t = Easing.easeOut.apply(min(1, max(0, local / entryDuration)))
-                    alpha = t
-                    offsetY = (1 - t) * (layer.entry == .slideUp ? 0.06 : -0.06)
-                }
-
-            case .wordByWord:
-                // Stagger across the entry window, leaving each word a fade of its own.
-                let perWord = entryDuration / Double(max(1, words.count))
-                let wordStart = Double(index) * perWord
-                let fade = max(0.08, perWord * 0.8)
-                alpha = min(1, max(0, (local - wordStart) / fade))
-                scale = 0.94 + alpha * 0.06
-
-            case .typeOn:
-                // Approximated at word granularity. Genuine per-character typing would need
-                // per-glyph rasterisation, which is a lot of texture churn for an effect that
-                // reads almost identically at 30 fps.
-                let perWord = entryDuration / Double(max(1, words.count))
-                alpha = local >= Double(index) * perWord ? 1 : 0
             }
 
             return TextDraw.Word(
@@ -246,22 +273,17 @@ public struct RenderPlanner: Sendable {
         return TextDraw(
             layerID: layer.id,
             words: drawWords,
-            fontCategory: layer.fontCategory,
-            sizeRatio: layer.sizeRatio,
-            color: .fromHex(layer.colorHex),
-            hasShadow: layer.hasShadow,
-            alignment: layer.alignment,
+            style: TextDraw.Style(layer: layer),
             frame: layer.frame
         )
     }
 
     // MARK: - Audio
 
-    /// Mixed gain per audio clip at `time`. Preview and export both use this, so a fade heard
-    /// in preview is the fade that gets written.
-    public func audioGains(_ timeline: Timeline, at time: Double) -> [(clipID: UUID, gain: Double)] {
-        timeline.audio
-            .filter { time >= $0.start && time < $0.end }
+    /// Mixed gain per audio clip at `time`, from the same planner preview and export use.
+    public func audioGains(_ timeline: Timeline, assets: AssetPool, at time: Double) -> [(trackID: UUID, gain: Double)] {
+        AudioMixPlanner().plan(timeline, assets: assets).tracks
             .map { ($0.id, $0.gain(at: time)) }
+            .filter { $0.1 > 0 }
     }
 }

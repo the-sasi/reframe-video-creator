@@ -58,6 +58,15 @@ public struct SceneDetector: Sendable {
         public var dissolveResidualThreshold: Float
         /// Luma standard deviation below this means the frame is essentially flat — a fade.
         public var flatFrameStdDev: Float
+        /// A flat frame also has to be *dark* or *bright* to be a fade. A dim, low-contrast shot
+        /// (a night scene, a plain wall) is flat but is not fading anywhere.
+        public var fadeExtremeLuma: Float
+        /// Longest run, in seconds, that can still be a gradual transition. Anything longer is
+        /// camera motion or action, however elevated the frame difference.
+        public var maxGradualDuration: Double
+        /// A gradual transition has to *arrive* somewhere: the frames either side of the run must
+        /// differ by at least this much, or the run was a wobble inside one shot.
+        public var gradualEndpointMinDifference: Float
 
         public init(
             hueWeight: Float = 1.0,
@@ -69,7 +78,10 @@ public struct SceneDetector: Sendable {
             minimumShotDuration: Double = 0.15,
             gradualMinValue: Float = 0.016,
             dissolveResidualThreshold: Float = 0.028,
-            flatFrameStdDev: Float = 0.035
+            flatFrameStdDev: Float = 0.035,
+            fadeExtremeLuma: Float = 0.14,
+            maxGradualDuration: Double = 1.6,
+            gradualEndpointMinDifference: Float = 0.06
         ) {
             self.hueWeight = hueWeight
             self.saturationWeight = saturationWeight
@@ -81,6 +93,9 @@ public struct SceneDetector: Sendable {
             self.gradualMinValue = gradualMinValue
             self.dissolveResidualThreshold = dissolveResidualThreshold
             self.flatFrameStdDev = flatFrameStdDev
+            self.fadeExtremeLuma = fadeExtremeLuma
+            self.maxGradualDuration = maxGradualDuration
+            self.gradualEndpointMinDifference = gradualEndpointMinDifference
         }
 
         public static let `default` = Parameters()
@@ -229,9 +244,10 @@ public struct SceneDetector: Sendable {
     ///    the mean residual of that linear-blend model is small, it is a dissolve; if it is
     ///    large, the elevated difference was camera motion or action, not an edit.
     ///
-    /// A run that fits neither is reported as `.unknownGradual` at low confidence, which the
-    /// compiler turns into a low-confidence dissolve, which the binder's `safeFallback` turns
-    /// into a cut. Nothing is asserted that was not fitted.
+    /// A run that fits neither model produces **no boundary**. Elevated frame difference that is
+    /// not a fade and not a blend is camera motion or action inside one shot; asserting an edit
+    /// there would be a phantom cut. Runs longer than `maxGradualDuration`, or whose endpoints
+    /// look alike, are rejected before either test for the same reason.
     public func detectGradualTransitions(
         metrics: [FrameMetric],
         thumbs: [[Float]],
@@ -269,6 +285,15 @@ public struct SceneDetector: Sendable {
             let from = thumbs[startIdx]
             let to = thumbs[endIdx]
             let span = Float(endIdx - startIdx)
+            let runSeconds = metrics[endIdx].time - metrics[startIdx].time
+
+            // A run longer than any plausible transition is motion, not an edit. Skipping it
+            // wholesale — rather than reporting an "unknown gradual" boundary at its end — is
+            // what stops a two-second pan from splitting one shot into two.
+            guard runSeconds <= parameters.maxGradualDuration else {
+                i = j + 1
+                continue
+            }
 
             // Fade test first: a fade is a special case of a dissolve where one end is flat,
             // and naming it correctly is more useful than calling everything a dissolve.
@@ -279,24 +304,39 @@ public struct SceneDetector: Sendable {
                     .min { $0.lumaStdDev < $1.lumaStdDev }?.index ?? middle
                 let flatMean = metrics[min(flatIndex, metrics.count - 1)].lumaMean
                 let goingDark = flatMean < 0.5
-                let isFadeIn = flatIndex <= middle
+                let isExtreme = flatMean <= parameters.fadeExtremeLuma
+                    || flatMean >= 1 - parameters.fadeExtremeLuma
 
-                let kind: DetectedBoundary.Kind = goingDark
-                    ? (isFadeIn ? .fadeFromBlack : .fadeToBlack)
-                    : (isFadeIn ? .fadeFromWhite : .fadeToWhite)
+                if isExtreme {
+                    let isFadeIn = flatIndex <= middle
+                    let kind: DetectedBoundary.Kind = goingDark
+                        ? (isFadeIn ? .fadeFromBlack : .fadeToBlack)
+                        : (isFadeIn ? .fadeFromWhite : .fadeToWhite)
 
-                results.append(
-                    DetectedBoundary(
-                        kind: kind,
-                        time: metrics[isFadeIn ? endIdx : startIdx].time,
-                        duration: metrics[endIdx].time - metrics[startIdx].time,
-                        confidence: min(0.92, 0.60 + Double((parameters.flatFrameStdDev - minStdDev) * 6)),
-                        basis: String(
-                            format: "luma std dev fell to %.3f over %d frames, mean %.2f",
-                            minStdDev, runLength, flatMean
+                    results.append(
+                        DetectedBoundary(
+                            kind: kind,
+                            time: metrics[isFadeIn ? endIdx : startIdx].time,
+                            duration: runSeconds,
+                            confidence: min(0.92, 0.60 + Double((parameters.flatFrameStdDev - minStdDev) * 6)),
+                            basis: String(
+                                format: "luma std dev fell to %.3f over %d frames, mean %.2f",
+                                minStdDev, runLength, flatMean
+                            )
                         )
                     )
-                )
+                    i = j + 1
+                    continue
+                }
+                // Flat but mid-grey: a dim, low-contrast shot. Fall through to the dissolve
+                // test rather than calling it a fade.
+            }
+
+            // A transition ends somewhere different from where it began. If the frames either
+            // side of the run are nearly the same picture, the elevated difference was a wobble
+            // — a flash, a hand pass, a small camera bump — inside one shot.
+            let endpointDifference = PixelAccess.meanAbsoluteDifference(from, to)
+            guard endpointDifference >= parameters.gradualEndpointMinDifference else {
                 i = j + 1
                 continue
             }
@@ -322,29 +362,18 @@ public struct SceneDetector: Sendable {
                     DetectedBoundary(
                         kind: .dissolve,
                         time: metrics[endIdx].time,
-                        duration: metrics[endIdx].time - metrics[startIdx].time,
+                        duration: runSeconds,
                         confidence: confidence,
                         basis: String(
                             format: "blend residual %.3f over %d frames", meanResidual, runLength
                         )
                     )
                 )
-            } else if runLength >= 5 {
-                // Something happened, but it did not fit the model. Say so honestly rather than
-                // guessing at a whip or a glitch we cannot actually distinguish.
-                results.append(
-                    DetectedBoundary(
-                        kind: .unknownGradual,
-                        time: metrics[endIdx].time,
-                        duration: metrics[endIdx].time - metrics[startIdx].time,
-                        confidence: 0.34,
-                        basis: String(
-                            format: "elevated delta over %d frames but blend residual %.3f — model did not fit",
-                            runLength, meanResidual
-                        )
-                    )
-                )
             }
+            // Elevated difference that fits neither model is left alone. An earlier version
+            // reported it as an "unknown gradual" boundary at 0.34 confidence, which the binder
+            // then rendered as a cut — so every burst of camera motion became a phantom edit.
+            // Nothing is asserted that was not fitted.
 
             i = j + 1
         }

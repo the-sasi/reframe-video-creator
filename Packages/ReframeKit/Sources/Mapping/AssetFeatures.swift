@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 import CoreGraphics
 import Foundation
@@ -9,91 +10,14 @@ import Vision
 // API (iOS 18+) declares its own `NormalizedRect`, so the bare name is ambiguous in any file
 // that imports both. Qualifying is noisier than a typealias but says plainly which one is meant.
 
-/// What we know about one of the user's photos.
+/// Runs the Vision requests that describe a user asset and packs them into the persistable
+/// `RecipeCore.AssetFeatures`.
 ///
 /// Everything here comes from Vision requests that are already on the device — no downloaded
 /// model, no licence question, no app-size cost. See docs/03-ai-models.md for why this
-/// deliberately stops short of object detection.
-public struct AssetFeatures: Sendable, Hashable {
-    public var assetID: UUID
-    /// Fraction of frame occupied by the salient region. Drives shot-scale matching.
-    public var salientAreaFraction: Double?
-    /// Where the subject is, for subject-aware cropping.
-    public var salientRect: RecipeCore.NormalizedRect?
-    /// `VNCalculateImageAestheticsScoresRequest.overallScore`, roughly -1...1.
-    public var aestheticScore: Double?
-    /// Screenshots, receipts, documents. A built-in classifier we get for free, and the single
-    /// most useful signal for keeping junk out of an auto-arranged reel.
-    public var isUtility: Bool
-    public var orientation: AssetOrientation
-    public var aspectRatio: Double
-    public var brightness: Double
-    public var isVideo: Bool
-    public var duration: Double
-    /// Vision feature print, for near-duplicate detection between assets.
-    public var featurePrint: FeaturePrintBox?
-
-    public var framing: ShotFraming? {
-        salientAreaFraction.map(ShotFraming.init(salientAreaFraction:))
-    }
-
-    public init(
-        assetID: UUID,
-        salientAreaFraction: Double? = nil,
-        salientRect: RecipeCore.NormalizedRect? = nil,
-        aestheticScore: Double? = nil,
-        isUtility: Bool = false,
-        orientation: AssetOrientation = .portrait,
-        aspectRatio: Double = 1,
-        brightness: Double = 0.5,
-        isVideo: Bool = false,
-        duration: Double = 0,
-        featurePrint: FeaturePrintBox? = nil
-    ) {
-        self.assetID = assetID
-        self.salientAreaFraction = salientAreaFraction
-        self.salientRect = salientRect
-        self.aestheticScore = aestheticScore
-        self.isUtility = isUtility
-        self.orientation = orientation
-        self.aspectRatio = aspectRatio
-        self.brightness = brightness
-        self.isVideo = isVideo
-        self.duration = duration
-        self.featurePrint = featurePrint
-    }
-}
-
-/// Wraps `VNFeaturePrintObservation` so `AssetFeatures` can stay `Hashable` and `Sendable`.
-///
-/// The observation is immutable after creation and only ever read via `computeDistance`, which
-/// is what makes the `@unchecked` sound.
-public struct FeaturePrintBox: @unchecked Sendable, Hashable {
-    public let observation: VNFeaturePrintObservation
-
-    public init(_ observation: VNFeaturePrintObservation) {
-        self.observation = observation
-    }
-
-    public static func == (lhs: FeaturePrintBox, rhs: FeaturePrintBox) -> Bool {
-        lhs.observation === rhs.observation
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(ObjectIdentifier(observation))
-    }
-
-    /// Euclidean distance between prints. Smaller is more similar; identical images give 0.
-    public func distance(to other: FeaturePrintBox) -> Double? {
-        var distance = Float(0)
-        guard (try? observation.computeDistance(&distance, to: other.observation)) != nil else {
-            return nil
-        }
-        return Double(distance)
-    }
-}
-
-/// Runs the Vision requests that describe a user asset.
+/// deliberately stops short of object detection. The feature print is stored as raw floats so
+/// the result can live in the project file and never has to be recomputed for a photo that
+/// has not changed.
 public struct AssetFeatureExtractor: Sendable {
 
     /// Analysis resolution. Vision does not need more than this to answer "where is the subject
@@ -102,7 +26,6 @@ public struct AssetFeatureExtractor: Sendable {
     private static let analysisDimension = 768
 
     private let resolver: AssetResolver
-    private let colorAnalyzer = ColorAnalyzerBridge()
 
     public init(resolver: AssetResolver) {
         self.resolver = resolver
@@ -110,10 +33,11 @@ public struct AssetFeatureExtractor: Sendable {
 
     public func extract(
         from pool: AssetPool,
+        skipping existing: Set<UUID> = [],
         progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async -> [UUID: AssetFeatures] {
         var results: [UUID: AssetFeatures] = [:]
-        let visuals = pool.visuals
+        let visuals = pool.visuals.filter { !existing.contains($0.id) }
 
         for (index, reference) in visuals.enumerated() {
             if Task.isCancelled { break }
@@ -155,10 +79,11 @@ public struct AssetFeatureExtractor: Sendable {
         let saliencyRequest = VNGenerateAttentionBasedSaliencyImageRequest()
         let aestheticsRequest = VNCalculateImageAestheticsScoresRequest()
         let featurePrintRequest = VNGenerateImageFeaturePrintRequest()
+        let faceRequest = VNDetectFaceRectanglesRequest()
 
-        // One handler, three requests — Vision shares the decoded image across them, so this is
-        // meaningfully cheaper than three separate performs.
-        try? handler.perform([saliencyRequest, aestheticsRequest, featurePrintRequest])
+        // One handler, four requests — Vision shares the decoded image across them, so this is
+        // meaningfully cheaper than separate performs.
+        try? handler.perform([saliencyRequest, aestheticsRequest, featurePrintRequest, faceRequest])
 
         var salientRect: RecipeCore.NormalizedRect?
         if let observation = saliencyRequest.results?.first as? VNSaliencyImageObservation,
@@ -175,9 +100,26 @@ public struct AssetFeatureExtractor: Sendable {
             salientRect = union
         }
 
+        // Faces refine the subject: if saliency found nothing but a face is there, the face is
+        // the subject; if both exist, the union keeps heads inside any crop.
+        let faces = (faceRequest.results ?? []).map { face in
+            RecipeCore.NormalizedRect.fromVision(
+                x: face.boundingBox.origin.x, y: face.boundingBox.origin.y,
+                width: face.boundingBox.size.width, height: face.boundingBox.size.height
+            )
+        }
+        if !faces.isEmpty {
+            let faceUnion = faces.dropFirst().reduce(faces[0]) { $0.union($1) }
+            // Pad the face box a little so a crop anchored on it does not clip the hair.
+            let padded = faceUnion.scaled(by: 1.4).clampedInsideUnitSquare()
+            salientRect = salientRect.map { $0.union(padded) } ?? padded
+        }
+
         let aesthetics = aestheticsRequest.results?.first as? VNImageAestheticsScoresObservation
         let featurePrint = (featurePrintRequest.results?.first as? VNFeaturePrintObservation)
-            .map(FeaturePrintBox.init)
+            .flatMap(Self.floats(from:))
+
+        let stats = Self.lumaStatistics(of: image)
 
         return AssetFeatures(
             assetID: reference.id,
@@ -187,7 +129,9 @@ public struct AssetFeatureExtractor: Sendable {
             isUtility: aesthetics?.isUtility ?? false,
             orientation: reference.orientation,
             aspectRatio: reference.aspectRatio,
-            brightness: colorAnalyzer.meanBrightness(of: image),
+            brightness: stats.brightness,
+            sharpness: stats.sharpness,
+            faceCount: faces.count,
             isVideo: reference.kind == .video,
             duration: reference.duration,
             featurePrint: featurePrint
@@ -202,35 +146,65 @@ public struct AssetFeatureExtractor: Sendable {
         let time = CMTime(seconds: min(1.0, duration * 0.25), preferredTimescale: 600)
         return try? await generator.image(at: time).image
     }
-}
 
-/// Small bridge so `Mapping` can measure brightness without depending on `Analysis`.
-/// Duplicating twenty lines is cheaper than a module dependency that would let asset scoring
-/// reach into reference analysis.
-struct ColorAnalyzerBridge: Sendable {
-    func meanBrightness(of image: CGImage) -> Double {
-        let width = min(64, image.width)
-        let height = min(64, image.height)
-        guard width > 0, height > 0 else { return 0.5 }
+    /// The feature print's raw vector. `VNFeaturePrintObservation.data` is a packed array of
+    /// `elementType`; on every OS this app supports that is `Float`.
+    private static func floats(from observation: VNFeaturePrintObservation) -> [Float]? {
+        guard observation.elementType == .float, observation.elementCount > 0 else { return nil }
+        let count = observation.elementCount
+        return observation.data.withUnsafeBytes { raw -> [Float]? in
+            guard raw.count >= count * MemoryLayout<Float>.size else { return nil }
+            return Array(raw.bindMemory(to: Float.self).prefix(count))
+        }
+    }
 
-        var buffer = [UInt8](repeating: 0, count: width * height * 4)
+    /// Mean luma and a sharpness estimate from a 96 px greyscale thumbnail.
+    ///
+    /// Sharpness is the variance of a 3×3 Laplacian, normalised into 0…1 with a soft knee. It
+    /// separates "in focus" from "soft or motion-blurred" reliably enough to rank two similar
+    /// photos, which is all the mapper asks of it.
+    private static func lumaStatistics(of image: CGImage) -> (brightness: Double, sharpness: Double) {
+        let width = min(96, image.width)
+        let height = min(96, image.height)
+        guard width > 2, height > 2 else { return (0.5, 0.5) }
+
+        var buffer = [UInt8](repeating: 0, count: width * height)
         let drawn = buffer.withUnsafeMutableBytes { raw -> Bool in
             guard let context = CGContext(
                 data: raw.baseAddress, width: width, height: height,
-                bitsPerComponent: 8, bytesPerRow: width * 4,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                bitsPerComponent: 8, bytesPerRow: width,
+                space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue
             ) else { return false }
+            context.interpolationQuality = .medium
             context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
             return true
         }
-        guard drawn else { return 0.5 }
+        guard drawn else { return (0.5, 0.5) }
 
-        var total = 0.0
-        for i in Swift.stride(from: 0, to: buffer.count, by: 4) {
-            total += 0.2126 * Double(buffer[i]) + 0.7152 * Double(buffer[i + 1])
-                + 0.0722 * Double(buffer[i + 2])
+        var sum = 0.0
+        var laplacianSum = 0.0
+        var laplacianSquares = 0.0
+        var count = 0.0
+        for y in 1..<(height - 1) {
+            for x in 1..<(width - 1) {
+                let i = y * width + x
+                let c = Double(buffer[i])
+                sum += c
+                let lap = 4 * c
+                    - Double(buffer[i - 1]) - Double(buffer[i + 1])
+                    - Double(buffer[i - width]) - Double(buffer[i + width])
+                laplacianSum += lap
+                laplacianSquares += lap * lap
+                count += 1
+            }
         }
-        return total / (Double(width * height) * 255)
+        guard count > 0 else { return (0.5, 0.5) }
+        let brightness = sum / (count * 255)
+        let mean = laplacianSum / count
+        let variance = laplacianSquares / count - mean * mean
+        // Empirically ~40 for soft photos, ~400+ for crisp ones at this thumbnail size.
+        let sharpness = min(1, max(0, log10(max(variance, 1)) / 3.0))
+        return (brightness, sharpness)
     }
 }

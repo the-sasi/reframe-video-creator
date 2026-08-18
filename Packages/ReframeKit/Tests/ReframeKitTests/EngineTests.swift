@@ -193,12 +193,123 @@ struct SceneDetectionTests {
         #expect(boundaries.contains { $0.kind == .dissolve })
         #expect(!boundaries.contains { $0.kind == .cut })
     }
+
+    @Test("A long slow pan does not become a phantom boundary")
+    func panIsNotAnEdit() {
+        // Two seconds of moderately elevated frame difference whose endpoints look nothing
+        // like a blend of each other — camera motion. Must produce no boundary at all.
+        let detector = SceneDetector()
+        let frameCount = 120
+        var thumbs: [[Float]] = []
+        var input: [FrameMetric] = []
+        for index in 0..<frameCount {
+            let moving = (20..<80).contains(index)
+            // A gradient that slides: each frame differs from its neighbours, and the run's
+            // endpoints differ strongly, but the middle frames are not blends of the ends.
+            let phase = Float(index) * 0.11
+            let thumb = (0..<(24 * 42)).map { i in
+                0.5 + 0.4 * sin(Float(i % 24) * 0.5 + (moving ? phase : 0))
+            }
+            thumbs.append(thumb)
+            input.append(
+                FrameMetric(
+                    index: index, time: Double(index) / 30.0,
+                    contentValue: moving ? 0.03 : 0.003, lumaMean: 0.5, lumaStdDev: 0.28
+                )
+            )
+        }
+        let boundaries = detector.detectBoundaries(metrics: input, thumbs: thumbs, duration: 4)
+        #expect(boundaries.filter { $0.kind != .start }.isEmpty, "got \(boundaries.map(\.kind))")
+    }
+
+    @Test("A dim, flat, mid-grey shot is not a fade")
+    func dimShotIsNotAFade() {
+        let detector = SceneDetector()
+        let frameCount = 60
+        var thumbs: [[Float]] = []
+        var input: [FrameMetric] = []
+        for index in 0..<frameCount {
+            let dim = (20..<40).contains(index)
+            thumbs.append([Float](repeating: dim ? 0.35 : 0.5, count: 24 * 42))
+            input.append(
+                FrameMetric(
+                    index: index, time: Double(index) / 30.0,
+                    contentValue: (index == 20 || index == 40) ? 0.02 : (dim ? 0.017 : 0.003),
+                    lumaMean: dim ? 0.35 : 0.5,
+                    lumaStdDev: dim ? 0.01 : 0.25
+                )
+            )
+        }
+        let boundaries = detector.detectBoundaries(metrics: input, thumbs: thumbs, duration: 2)
+        let fades = boundaries.filter {
+            [.fadeToBlack, .fadeFromBlack, .fadeToWhite, .fadeFromWhite].contains($0.kind)
+        }
+        #expect(fades.isEmpty, "mid-grey flat run reported as fade: \(fades.map(\.kind))")
+    }
+
+    @Test("A real fade to black is still detected")
+    func fadeToBlackDetected() {
+        let detector = SceneDetector()
+        let frameCount = 60
+        var thumbs: [[Float]] = []
+        var input: [FrameMetric] = []
+        for index in 0..<frameCount {
+            let luma: Float
+            if index < 20 { luma = 0.55 }
+            else if index < 30 { luma = 0.55 * Float(30 - index) / 10 }
+            else if index < 40 { luma = 0.02 }
+            else { luma = 0.6 }
+            let variance: Float = luma < 0.05 ? 0.005 : 0.25
+            thumbs.append([Float](repeating: luma, count: 24 * 42))
+            input.append(
+                FrameMetric(
+                    index: index, time: Double(index) / 30.0,
+                    contentValue: (20...30).contains(index) ? 0.03 : (index == 40 ? 0.45 : 0.003),
+                    lumaMean: luma, lumaStdDev: variance
+                )
+            )
+        }
+        let boundaries = detector.detectBoundaries(metrics: input, thumbs: thumbs, duration: 2)
+        #expect(boundaries.contains { $0.kind == .fadeToBlack })
+    }
 }
 
 // MARK: - Motion
 
 @Suite("Motion fitting")
 struct MotionTests {
+
+    @Test("A pure zoom is classified as a zoom, not a complex move")
+    func zoomClassifiesAsZoom() {
+        // Centre-relative translation is zero for a zoom about the frame centre. Before the
+        // fix the corner-relative translation of a 10% zoom read as a 5–9% pan and every zoom
+        // fell into `.complex`.
+        let motion = FittedMotion(
+            scale: 1.12, translationX: 0.004, translationY: -0.006,
+            rotationRadians: 0.002, residual: 0.01, sampleCount: 4
+        )
+        #expect(motion.kind == .zoomIn)
+        let out = FittedMotion(
+            scale: 0.88, translationX: 0.0, translationY: 0.0,
+            rotationRadians: 0.0, residual: 0.01, sampleCount: 4
+        )
+        #expect(out.kind == .zoomOut)
+    }
+
+    @Test("Pan direction is named for the camera")
+    func panDirectionSemantics() {
+        // Content sliding right on screen means the camera panned left.
+        let right = FittedMotion(scale: 1.0, translationX: 0.12, translationY: 0.0, rotationRadians: 0, residual: 0.01, sampleCount: 4)
+        #expect(right.kind == .panLeft)
+        let down = FittedMotion(scale: 1.0, translationX: 0.0, translationY: 0.12, rotationRadians: 0, residual: 0.01, sampleCount: 4)
+        #expect(down.kind == .panUp)
+    }
+
+    @Test("A dominant zoom with slight drift is still a zoom")
+    func zoomWithDriftIsZoom() {
+        let motion = FittedMotion(scale: 1.20, translationX: 0.055, translationY: 0.0, rotationRadians: 0, residual: 0.01, sampleCount: 4)
+        #expect(motion.kind == .zoomIn)
+    }
 
     @Test("Recovers a synthetic 1.17x zoom to within 2%")
     func recoversZoom() {
@@ -446,7 +557,7 @@ struct CommandTests {
 
         return [
             .trimClip(id: clipID, duration: 0.5, sourceStart: 0.2, wasDuration: 1.0, wasSourceStart: 0),
-            .splitClip(id: clipID, atLocalTime: 0.5, newClipID: UUID(), wasDuration: 1.0),
+            .splitClip(id: clipID, atLocalTime: 0.5, newClipID: UUID(), wasDuration: 1.0, wasCropEnd: clip.cropEnd),
             .deleteClip(index: 2, clip: timeline.clips[2]),
             .insertClip(index: 1, clip: VideoClip(assetID: UUID(), start: 0, duration: 1)),
             .moveClip(from: 0, to: 3),
@@ -463,6 +574,7 @@ struct CommandTests {
                 wasVignette: clip.vignette, wasGrain: clip.grain
             ),
             .setClipVolume(id: clipID, volume: 0.5, wasVolume: clip.volume),
+            .setClipFit(id: clipID, fitMode: .fit, wasFitMode: clip.fitMode),
             .setTransition(
                 clipID: clipID,
                 transition: Transition(kind: .dissolve, duration: 0.3),
@@ -479,14 +591,23 @@ struct CommandTests {
             .setTextStyle(
                 id: textLayer.id,
                 style: TextLayerStyle(
-                    fontCategory: .serif, sizeRatio: 0.08, colorHex: "#FF0000",
-                    hasShadow: false, alignment: .leading, entry: .popIn, exit: .popOut
+                    fontCategory: .serif, fontName: "Georgia", weight: .heavy, isItalic: true,
+                    allCaps: true, sizeRatio: 0.08, letterSpacing: 0.04, lineSpacing: 1.3,
+                    colorHex: "#FF0000", opacity: 0.9, hasShadow: false,
+                    outline: TextOutline(), background: TextBackground(), rotation: 0.1,
+                    alignment: .leading, entry: .popIn, exit: .popOut
                 ),
                 wasStyle: TextLayerStyle(layer: textLayer)
             ),
+            .setTextWordTimings(id: textLayer.id, timings: [0], wasTimings: textLayer.wordTimings),
             .addAudioClip(clip: AudioClip(assetID: UUID(), start: 0, duration: 3)),
             .deleteAudioClip(index: 0, clip: audioClip),
             .setAudioVolume(id: audioClip.id, volume: 0.4, wasVolume: audioClip.volume),
+            .setAudioFades(id: audioClip.id, fadeIn: 0.3, fadeOut: 0.6, wasFadeIn: audioClip.fadeIn, wasFadeOut: audioClip.fadeOut),
+            .setAudioMuted(id: audioClip.id, isMuted: true, wasMuted: audioClip.isMuted),
+            .retimeAudioClip(id: audioClip.id, start: 0.5, duration: 2, sourceStart: 1,
+                             wasStart: audioClip.start, wasDuration: audioClip.duration, wasSourceStart: audioClip.sourceStart),
+            .setDucking(enabled: false, wasEnabled: timeline.duckMusicUnderVoice),
             .addOverlay(
                 layer: OverlayLayer(
                     assetID: UUID(), start: 0, end: 3,
@@ -496,6 +617,7 @@ struct CommandTests {
             .deleteOverlay(index: 0, layer: overlay),
             .setOverlayFrame(id: overlay.id, frame: tight, wasFrame: overlay.frame),
             .setCanvas(canvas: .square1080, wasCanvas: .reel1080),
+            .setBackground(hex: "#101010", wasHex: timeline.backgroundHex),
         ]
     }
 
@@ -511,12 +633,13 @@ struct CommandTests {
             switch command {
             case .trimClip, .splitClip, .deleteClip, .insertClip, .moveClip,
                  .replaceClipAsset, .setClipSpeed, .setClipCrop, .setClipGrade,
-                 .setClipEffects, .setClipVolume, .setTransition,
+                 .setClipEffects, .setClipVolume, .setClipFit, .setTransition,
                  .addTextLayer, .deleteTextLayer, .setTextContent, .setTextFrame,
-                 .setTextTiming, .setTextStyle,
-                 .addAudioClip, .deleteAudioClip, .setAudioVolume,
+                 .setTextTiming, .setTextStyle, .setTextWordTimings,
+                 .addAudioClip, .deleteAudioClip, .setAudioVolume, .setAudioFades,
+                 .setAudioMuted, .retimeAudioClip, .setDucking,
                  .addOverlay, .deleteOverlay, .setOverlayFrame,
-                 .setCanvas:
+                 .setCanvas, .setBackground:
                 continue
             }
         }
@@ -549,12 +672,31 @@ struct CommandTests {
         let clipID = timeline.clips[1].id
 
         let command = EditCommand.splitClip(
-            id: clipID, atLocalTime: 0.4, newClipID: UUID(), wasDuration: 1.0
+            id: clipID, atLocalTime: 0.4, newClipID: UUID(), wasDuration: 1.0,
+            wasCropEnd: timeline.clips[1].cropEnd
         )
         try command.apply(to: &timeline)
 
         #expect(timeline.clips.count == 5)
         #expect(abs(timeline.duration - before) < 0.001)
+    }
+
+    @Test("Undoing a split restores the Ken Burns end crop")
+    func splitUndoRestoresCrop() throws {
+        var timeline = self.timeline()
+        timeline.clips[1].cropStart = .full
+        timeline.clips[1].cropEnd = NormalizedRect.full.scaled(by: 0.8)
+        let original = timeline
+        let clip = timeline.clips[1]
+
+        let command = EditCommand.splitClip(
+            id: clip.id, atLocalTime: 0.5, newClipID: UUID(),
+            wasDuration: clip.duration, wasCropEnd: clip.cropEnd
+        )
+        try command.apply(to: &timeline)
+        #expect(timeline.clips[1].cropEnd.width > 0.8 && timeline.clips[1].cropEnd.width < 1.0)
+        try command.revert(from: &timeline)
+        #expect(timeline == original)
     }
 
     @Test("Continuous gestures coalesce into one undo step")
@@ -645,6 +787,41 @@ struct RenderPlanningTests {
         #expect(abs(clip.crop(atLocalTime: 2.0).width - 0.8) < 0.001)
     }
 
+    @Test("Fit mode letterboxes instead of cropping")
+    func fitModeUsesFullSourceAndFitFlag() {
+        var timeline = Timeline(canvas: .reel1080)
+        timeline.clips = [
+            VideoClip(assetID: UUID(), start: 0, duration: 1.0,
+                      cropStart: .full, cropEnd: NormalizedRect.full.scaled(by: 0.8), fitMode: .fit)
+        ]
+        timeline.relayout()
+        let plan = RenderPlanner().plan(timeline, at: 0.5)
+        guard case .single(let layers) = plan.stage, let layer = layers.first else {
+            Issue.record("expected a single stage"); return
+        }
+        #expect(layer.sourceCrop == .full)
+        #expect(layer.fitToDestination)
+    }
+
+    @Test("Captions with word timings reveal on schedule")
+    func wordTimingsDriveReveal() {
+        let layer = TextLayer(
+            text: "one two three", role: .caption, start: 1.0, end: 4.0,
+            frame: NormalizedRect(x: 0.1, y: 0.7, width: 0.8, height: 0.1),
+            entry: .none, exit: .none, wordTimings: [0, 0.5, 1.0]
+        )
+        let planner = RenderPlanner()
+        guard let early = planner.textDraw(for: layer, at: 1.3) else {
+            Issue.record("expected a draw"); return
+        }
+        #expect(early.words[0].opacity > 0.99)
+        #expect(early.words[1].opacity < 0.01)
+        guard let later = planner.textDraw(for: layer, at: 2.2) else {
+            Issue.record("expected a draw"); return
+        }
+        #expect(later.words.allSatisfy { $0.opacity > 0.99 })
+    }
+
     @Test("Word-by-word reveal staggers word opacity")
     func wordByWordStagger() {
         let planner = RenderPlanner()
@@ -675,6 +852,40 @@ struct RenderPlanningTests {
 
 @Suite("Recipe binding")
 struct BindingTests {
+
+    @Test("A landscape photo bound into a portrait slot is cropped around its subject")
+    func subjectAwareCrop() {
+        let framing = Confident(ShotFraming.medium, confidence: 0.7, basis: "test")
+        let subject = NormalizedRect(x: 0.75, y: 0.3, width: 0.2, height: 0.3)
+        let window = RecipeBinder.fillWindow(
+            sourceAspect: 4.0 / 3.0, targetAspect: 9.0 / 16.0,
+            subject: subject, referenceSubject: nil, framing: framing
+        )
+        #expect(window.width < 0.5)
+        #expect(window.x <= subject.centerX && window.x + window.width >= subject.centerX)
+
+        let centred = RecipeBinder.fillWindow(
+            sourceAspect: 4.0 / 3.0, targetAspect: 9.0 / 16.0,
+            subject: nil, referenceSubject: nil, framing: framing
+        )
+        #expect(abs(centred.centerX - 0.5) < 0.001)
+    }
+
+    @Test("Composition transfer puts the subject where the reference's was")
+    func compositionTransfer() {
+        let framing = Confident(ShotFraming.wide, confidence: 0.7, basis: "test")
+        // Reference subject sat at the left third; the user's subject is on the right of a
+        // wide photo. The window should place the user's subject at the left third of the
+        // canvas — i.e. window.x + 0.33 * window.width ≈ subject.centerX.
+        let referenceSubject = Confident(NormalizedRect(x: 0.2, y: 0.3, width: 0.25, height: 0.3), confidence: 0.7, basis: "test")
+        let subject = NormalizedRect(x: 0.6, y: 0.3, width: 0.2, height: 0.3)
+        let window = RecipeBinder.fillWindow(
+            sourceAspect: 16.0 / 9.0, targetAspect: 9.0 / 16.0,
+            subject: subject, referenceSubject: referenceSubject, framing: framing
+        )
+        let landed = window.x + referenceSubject.value.centerX * window.width
+        #expect(abs(landed - subject.centerX) < 0.02)
+    }
 
     @Test("Reference text is never bound into the output")
     func referenceTextIsNotCopied() {

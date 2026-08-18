@@ -68,6 +68,9 @@ public struct RenderPlan: Sendable, Hashable {
         public var opacity: Double
         public var grade: ColorGrade
         public var rotation: Double
+        /// Canvas-space point the rotation is about. Nil means the destination centre; text
+        /// words pass their layer's frame centre so a rotated caption turns as one block.
+        public var rotationPivot: SIMD2<Double>?
         /// Uniform scale about the destination centre, for pop-in animation.
         public var scale: Double
         /// 0...1 corner darkening.
@@ -75,6 +78,10 @@ public struct RenderPlan: Sendable, Hashable {
         /// 0...1 film grain. Animated from `RenderPlan.time`, so it moves rather than sitting
         /// as a fixed pattern — a static grain layer reads as a dirty lens.
         public var grain: Double
+        /// Shrink the quad to the texture's aspect ratio inside `destination` rather than
+        /// stretching to fill it. Letterboxed clips and logos; the planner cannot know source
+        /// dimensions, so the renderer resolves this against the texture it is handed.
+        public var fitToDestination: Bool
 
         public init(
             content: Content,
@@ -83,9 +90,11 @@ public struct RenderPlan: Sendable, Hashable {
             opacity: Double = 1,
             grade: ColorGrade = .neutral,
             rotation: Double = 0,
+            rotationPivot: SIMD2<Double>? = nil,
             scale: Double = 1,
             vignette: Double = 0,
-            grain: Double = 0
+            grain: Double = 0,
+            fitToDestination: Bool = false
         ) {
             self.content = content
             self.sourceCrop = sourceCrop
@@ -93,9 +102,11 @@ public struct RenderPlan: Sendable, Hashable {
             self.opacity = opacity
             self.grade = grade
             self.rotation = rotation
+            self.rotationPivot = rotationPivot
             self.scale = scale
             self.vignette = vignette
             self.grain = grain
+            self.fitToDestination = fitToDestination
         }
 
         public enum Content: Sendable, Hashable {
@@ -123,26 +134,70 @@ public struct RenderPlan: Sendable, Hashable {
 public struct TextDraw: Sendable, Hashable {
     public var layerID: UUID
     public var words: [Word]
-    public var fontCategory: FontCategory
-    /// Cap height as a fraction of canvas height.
-    public var sizeRatio: Double
-    public var color: SIMD4<Float>
-    public var hasShadow: Bool
-    public var alignment: TextAlignment
+    public var style: Style
     public var frame: NormalizedRect
 
-    public init(
-        layerID: UUID, words: [Word], fontCategory: FontCategory, sizeRatio: Double,
-        color: SIMD4<Float>, hasShadow: Bool, alignment: TextAlignment, frame: NormalizedRect
-    ) {
+    public init(layerID: UUID, words: [Word], style: Style, frame: NormalizedRect) {
         self.layerID = layerID
         self.words = words
-        self.fontCategory = fontCategory
-        self.sizeRatio = sizeRatio
-        self.color = color
-        self.hasShadow = hasShadow
-        self.alignment = alignment
+        self.style = style
         self.frame = frame
+    }
+
+    /// Everything that affects the *pixels* of the rasterised words. The rasteriser caches on
+    /// this plus the words; animation state lives on `Word` and never invalidates the cache.
+    public struct Style: Sendable, Hashable {
+        public var fontCategory: FontCategory
+        public var fontName: String?
+        public var weight: TextWeight
+        public var isItalic: Bool
+        /// Cap height as a fraction of canvas height.
+        public var sizeRatio: Double
+        public var letterSpacing: Double
+        public var lineSpacing: Double
+        public var color: SIMD4<Float>
+        public var hasShadow: Bool
+        public var outline: TextOutline?
+        public var background: TextBackground?
+        public var alignment: TextAlignment
+        /// Whole-layer opacity, applied on top of per-word alpha.
+        public var opacity: Double
+        /// Radians about the frame centre.
+        public var rotation: Double
+
+        public init(
+            fontCategory: FontCategory, fontName: String? = nil, weight: TextWeight = .bold,
+            isItalic: Bool = false, sizeRatio: Double, letterSpacing: Double = 0,
+            lineSpacing: Double = 1.18, color: SIMD4<Float>, hasShadow: Bool,
+            outline: TextOutline? = nil, background: TextBackground? = nil,
+            alignment: TextAlignment, opacity: Double = 1, rotation: Double = 0
+        ) {
+            self.fontCategory = fontCategory
+            self.fontName = fontName
+            self.weight = weight
+            self.isItalic = isItalic
+            self.sizeRatio = sizeRatio
+            self.letterSpacing = letterSpacing
+            self.lineSpacing = lineSpacing
+            self.color = color
+            self.hasShadow = hasShadow
+            self.outline = outline
+            self.background = background
+            self.alignment = alignment
+            self.opacity = opacity
+            self.rotation = rotation
+        }
+
+        public init(layer: TextLayer) {
+            self.init(
+                fontCategory: layer.fontCategory, fontName: layer.fontName, weight: layer.weight,
+                isItalic: layer.isItalic, sizeRatio: layer.sizeRatio,
+                letterSpacing: layer.letterSpacing, lineSpacing: layer.lineSpacing,
+                color: .fromHex(layer.colorHex), hasShadow: layer.hasShadow,
+                outline: layer.outline, background: layer.background,
+                alignment: layer.alignment, opacity: layer.opacity, rotation: layer.rotation
+            )
+        }
     }
 
     public struct Word: Sendable, Hashable {
@@ -152,14 +207,24 @@ public struct TextDraw: Sendable, Hashable {
         public var offsetY: Double
         /// Scale about the word's own centre, for pop-in.
         public var scale: Double
+        /// True for the forced-line-break marker. Never drawn; the rasteriser starts a new line.
+        public var isLineBreak: Bool
 
-        public init(text: String, opacity: Double, offsetY: Double, scale: Double) {
+        public init(text: String, opacity: Double, offsetY: Double, scale: Double, isLineBreak: Bool = false) {
             self.text = text
             self.opacity = opacity
             self.offsetY = offsetY
             self.scale = scale
+            self.isLineBreak = isLineBreak
         }
     }
+
+    // Convenience accessors kept so call sites reading the old flat fields still make sense.
+    public var fontCategory: FontCategory { style.fontCategory }
+    public var sizeRatio: Double { style.sizeRatio }
+    public var color: SIMD4<Float> { style.color }
+    public var hasShadow: Bool { style.hasShadow }
+    public var alignment: TextAlignment { style.alignment }
 }
 
 extension SIMD4<Float> {

@@ -13,8 +13,9 @@ import RecipeCore
 /// advances time and renders one plan. No `CADisplayLink`, no separate timer, no chance of the
 /// render and the clock disagreeing.
 ///
-/// Crucially this calls the *same* `plan()` and `render()` as `VideoExporter`. What you see is
-/// what gets written, by construction rather than by discipline.
+/// Crucially this calls the *same* `plan()` and `render()` as `VideoExporter`, and plays the
+/// *same* `AudioMixPlan` the exporter writes. What you see and hear is what gets written, by
+/// construction rather than by discipline.
 @MainActor
 @Observable
 public final class PreviewEngine: NSObject {
@@ -32,8 +33,12 @@ public final class PreviewEngine: NSObject {
     private let planner = RenderPlanner()
     private let frameProvider: PreviewFrameProvider
     private let resolver: AssetResolver
+    private var assets: AssetPool
 
-    private var audioPlayer: AVAudioPlayer?
+    /// The mixed audio, as an `AVPlayer` over the same composition the exporter reads.
+    private var audioPlayer: AVPlayer?
+    private var audioComposition: AudioMixComposition?
+    private var audioBuildTask: Task<Void, Never>?
     private var lastDrawTimestamp: CFTimeInterval?
     private var prefetchTask: Task<Void, Never>?
     /// Guards against a second render being requested while one is still in flight, which on a
@@ -49,10 +54,13 @@ public final class PreviewEngine: NSObject {
         self.renderer = renderer
         self.resolver = resolver
         self.timeline = timeline
+        self.assets = assets
         self.frameProvider = PreviewFrameProvider(device: renderer.device, resolver: resolver)
         super.init()
 
+        Self.configureAudioSession()
         Task { await frameProvider.register(assets) }
+        rebuildAudioIfNeeded()
     }
 
     public var duration: Double { timeline.duration }
@@ -64,6 +72,7 @@ public final class PreviewEngine: NSObject {
         if currentTime >= duration - 0.01 { currentTime = 0 }
         isPlaying = true
         lastDrawTimestamp = nil
+        Task { await frameProvider.setPlaying(true) }
         startAudio(at: currentTime)
     }
 
@@ -71,6 +80,7 @@ public final class PreviewEngine: NSObject {
         isPlaying = false
         lastDrawTimestamp = nil
         audioPlayer?.pause()
+        Task { await frameProvider.setPlaying(false) }
     }
 
     public func togglePlayback() {
@@ -82,7 +92,7 @@ public final class PreviewEngine: NSObject {
         if isPlaying {
             startAudio(at: currentTime)
         } else {
-            audioPlayer?.currentTime = currentTime
+            seekAudio(to: currentTime)
         }
         schedulePrefetch()
     }
@@ -96,79 +106,92 @@ public final class PreviewEngine: NSObject {
     }
 
     public func endScrub() {
-        if isPlaying { startAudio(at: currentTime) }
+        if isPlaying { startAudio(at: currentTime) } else { seekAudio(to: currentTime) }
     }
 
+    /// The pool changed — an asset was added, replaced or removed. Textures for assets that
+    /// are still present are kept; only the registry and the audio mix are refreshed.
     public func updateAssets(_ pool: AssetPool) {
-        Task {
-            await frameProvider.register(pool)
-            await frameProvider.evictAll()
-        }
+        assets = pool
+        Task { await frameProvider.register(pool) }
+        rebuildAudioIfNeeded()
     }
 
     // MARK: - Audio
 
+    /// Preview must be audible with the silent switch on — every video editor behaves that way,
+    /// and a silent preview reads as "the audio is broken". `.playback` also keeps the mix
+    /// running through a background transition long enough to pause cleanly.
+    private static func configureAudioSession() {
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
+        try? session.setActive(true)
+        #endif
+    }
+
+    private func rebuildAudioIfNeeded() {
+        let plan = AudioMixPlanner().plan(timeline, assets: assets)
+        if let existing = audioComposition, existing.plan == plan { return }
+        if plan.isEmpty {
+            audioComposition = nil
+            audioPlayer?.pause()
+            audioPlayer = nil
+            audioBuildTask?.cancel()
+            return
+        }
+
+        audioBuildTask?.cancel()
+        let resolver = self.resolver
+        let assets = self.assets
+        audioBuildTask = Task { [weak self] in
+            let built = await AudioMixBuilder.build(plan: plan, resolver: resolver, assets: assets)
+            guard !Task.isCancelled, let self else { return }
+            self.installAudio(built)
+        }
+    }
+
+    private func installAudio(_ built: AudioMixComposition) {
+        audioComposition = built
+        let wasPlaying = isPlaying
+        audioPlayer?.pause()
+
+        guard !built.isEmpty else {
+            audioPlayer = nil
+            return
+        }
+        let item = AVPlayerItem(asset: built.composition)
+        item.audioMix = built.audioMix
+        let player = AVPlayer(playerItem: item)
+        player.automaticallyWaitsToMinimizeStalling = false
+        player.actionAtItemEnd = .pause
+        audioPlayer = player
+        DiagnosticsLog.shared.info("preview", "audio mix ready: \(built.plan.tracks.count) track(s)")
+
+        if wasPlaying {
+            startAudio(at: currentTime)
+        } else {
+            seekAudio(to: currentTime)
+        }
+    }
+
     private func startAudio(at time: Double) {
-        guard let clip = timeline.audio.first else { return }
-        guard let audioPlayer else {
-            // Not ready yet. Preparing is now driven by `currentAssetPool` being set rather
-            // than by the first `play()`, so this is a genuine miss rather than the normal
-            // path — previously the first play was *always* silent because preparation was
-            // kicked off here and then returned immediately.
-            DiagnosticsLog.shared.warning("preview", "audio not prepared yet; playing silent")
-            prepareAudioPlayer(for: clip)
-            return
-        }
-        audioPlayer.currentTime = max(0, clip.sourceStart + (time - clip.start))
-        audioPlayer.volume = Float(clip.volume)
-        audioPlayer.play()
-    }
-
-    /// Synchronous: `AVAudioPlayer(contentsOf:)` reads a local file and does not need to be
-    /// awaited. Making it async was what created the race.
-    private func prepareAudioPlayer(for clip: AudioClip) {
-        guard let reference = currentAssetPool?[clip.assetID] else {
-            DiagnosticsLog.shared.warning(
-                "preview", "audio clip references an asset not in the pool"
-            )
-            return
-        }
-        // Only file-backed audio can drive AVAudioPlayer directly. Photos-library audio would
-        // need an export first, which is not worth doing for preview — the export path handles
-        // it correctly either way.
-        guard case .sandboxRelativePath(let path) = reference.origin else {
-            DiagnosticsLog.shared.warning(
-                "preview", "audio origin is not a local file; preview will be silent"
-            )
-            return
-        }
-        let url = FileManager.default
-            .urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent(path)
-
-        do {
-            let player = try AVAudioPlayer(contentsOf: url)
-            player.prepareToPlay()
-            player.volume = Float(clip.volume)
-            audioPlayer = player
-            DiagnosticsLog.shared.info("preview", "audio ready: \(reference.displayName)")
-        } catch {
-            DiagnosticsLog.shared.failure(
-                "preview", "audio load failed: \(error.localizedDescription)"
-            )
-        }
-    }
-
-    /// Set by the owning view when the project's assets change. Preparing the player here
-    /// rather than lazily is what removes the first-play race.
-    public var currentAssetPool: AssetPool? {
-        didSet {
-            guard let clip = timeline.audio.first else {
-                audioPlayer = nil
-                return
+        guard let audioPlayer else { return }
+        let target = CMTime(seconds: max(0, time), preferredTimescale: 44_100)
+        audioPlayer.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            // The completion handler is not main-actor-isolated; hop back before touching state.
+            Task { @MainActor in
+                guard let self, self.isPlaying else { return }
+                self.audioPlayer?.play()
             }
-            prepareAudioPlayer(for: clip)
         }
+    }
+
+    private func seekAudio(to time: Double) {
+        audioPlayer?.seek(
+            to: CMTime(seconds: max(0, time), preferredTimescale: 44_100),
+            toleranceBefore: CMTime(value: 1, timescale: 30), toleranceAfter: CMTime(value: 1, timescale: 30)
+        )
     }
 
     // MARK: - Rendering
@@ -187,20 +210,29 @@ public final class PreviewEngine: NSObject {
             currentTime = max(0, timeline.duration)
         }
         schedulePrefetch()
+        rebuildAudioIfNeeded()
     }
 
     /// One frame. Called from `MTKViewDelegate.draw(in:)`.
     fileprivate func renderFrame(in view: MTKView) {
         guard let drawable = view.currentDrawable else { return }
 
-        // Advance the clock from the view's own timestamps rather than assuming a fixed frame
-        // duration — a dropped frame should skip time, not slow the video down.
         if isPlaying {
-            let now = CACurrentMediaTime()
-            if let last = lastDrawTimestamp {
-                currentTime += now - last
+            // When there is a mix, the audio player is the master clock — audio drift is what
+            // people notice, and slaving video to it is how every player keeps sync. Without a
+            // mix, advance from the view's own timestamps so a dropped frame skips time rather
+            // than slowing the video down.
+            if let audioPlayer, audioPlayer.rate > 0 {
+                let audioTime = audioPlayer.currentTime().seconds
+                if audioTime.isFinite, abs(audioTime - currentTime) > 0.04 {
+                    currentTime = audioTime
+                } else if let last = lastDrawTimestamp {
+                    currentTime += CACurrentMediaTime() - last
+                }
+            } else if let last = lastDrawTimestamp {
+                currentTime += CACurrentMediaTime() - last
             }
-            lastDrawTimestamp = now
+            lastDrawTimestamp = CACurrentMediaTime()
 
             if currentTime >= duration {
                 currentTime = duration
@@ -254,6 +286,43 @@ public final class PreviewEngine: NSObject {
         view.autoResizeDrawable = true
         view.delegate = self
         return view
+    }
+
+    /// Renders one frame at `time` into a CPU-readable image, for project thumbnails.
+    ///
+    /// Same planner, same renderer, so the poster frame *is* a frame of the video. Runs at a
+    /// small size so it costs a few milliseconds.
+    public func snapshot(at time: Double, maxDimension: Int = 360) async -> CGImage? {
+        let plan = planner.plan(timeline, at: time)
+        let canvas = timeline.canvas
+        let scale = Double(maxDimension) / Double(max(canvas.width, canvas.height))
+        let width = max(2, Int(Double(canvas.width) * scale)) & ~1
+        let height = max(2, Int(Double(canvas.height) * scale)) & ~1
+
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false
+        )
+        descriptor.usage = [.renderTarget, .shaderRead]
+        descriptor.storageMode = .shared
+        guard let target = renderer.device.makeTexture(descriptor: descriptor) else { return nil }
+
+        let resources = await frameProvider.resources(for: plan)
+        guard (try? renderer.render(plan: plan, resources: resources, into: target, waitForCompletion: true)) != nil else {
+            return nil
+        }
+
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        bytes.withUnsafeMutableBytes { raw in
+            target.getBytes(raw.baseAddress!, bytesPerRow: width * 4, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
+        }
+        let data = Data(bytes)
+        guard let provider = CGDataProvider(data: data as CFData) else { return nil }
+        return CGImage(
+            width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent
+        )
     }
 }
 

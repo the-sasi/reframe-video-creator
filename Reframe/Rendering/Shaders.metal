@@ -20,12 +20,19 @@ struct LayerUniforms {
     float4 sourceCrop;
     // exposure, contrast, saturation, temperature
     float4 grade;
-    // vignette, grain, time, unused
+    // vignette, grain, time, canvas aspect (width/height)
     float4 effects;
+    // Upright-UV -> texture-UV, as (a, b, c, d). Identity for photos and text; a rotation for
+    // video decoded in its natural orientation. Translation is `sourceOffset`.
+    float4 sourceTransform;
+    // Canvas-space point the rotation is about. The destination centre for a clip; the text
+    // block's centre for a word, so a rotated caption turns as one piece.
+    float2 pivot;
+    float2 sourceOffset;
     float  opacity;
     float  rotation;
     float  scale;
-    float  _pad;
+    float  _pad0;
 };
 
 struct TransitionUniforms {
@@ -37,7 +44,10 @@ struct TransitionUniforms {
 
 struct VertexOut {
     float4 position [[position]];
+    // Texture sampling coordinates, after the source transform.
     float2 uv;
+    // 0...1 across the quad — where in the *frame* this fragment is, for vignette and grain.
+    float2 frameUV;
 };
 
 // MARK: - Colour
@@ -106,14 +116,16 @@ vertex VertexOut layer_vertex(
     // Map into the destination rect, in canvas space.
     float2 canvasPoint = uniforms.destination.xy + scaled * uniforms.destination.zw;
 
-    // Rotate about the destination centre.
+    // Rotate about the pivot. Canvas space is not square, so rotate in pixel-proportional
+    // space and map back — otherwise a 45° rotation on a 9:16 canvas comes out sheared.
     if (uniforms.rotation != 0.0) {
-        float2 center = uniforms.destination.xy + uniforms.destination.zw * 0.5;
-        float2 offset = canvasPoint - center;
+        float aspect = uniforms.effects.w > 0.0 ? uniforms.effects.w : 1.0;
+        float2 offset = (canvasPoint - uniforms.pivot) * float2(aspect, 1.0);
         float s = sin(uniforms.rotation);
         float c = cos(uniforms.rotation);
-        canvasPoint = center + float2(offset.x * c - offset.y * s,
-                                      offset.x * s + offset.y * c);
+        float2 rotated = float2(offset.x * c - offset.y * s,
+                                offset.x * s + offset.y * c);
+        canvasPoint = uniforms.pivot + rotated / float2(aspect, 1.0);
     }
 
     VertexOut out;
@@ -121,7 +133,12 @@ vertex VertexOut layer_vertex(
     out.position = float4(canvasPoint.x * 2.0 - 1.0,
                           1.0 - canvasPoint.y * 2.0,
                           0.0, 1.0);
-    out.uv = uniforms.sourceCrop.xy + local * uniforms.sourceCrop.zw;
+    // Upright source coordinates, then through the orientation transform into texture space.
+    float2 upright = uniforms.sourceCrop.xy + local * uniforms.sourceCrop.zw;
+    float4 m = uniforms.sourceTransform;
+    out.uv = float2(m.x * upright.x + m.z * upright.y + uniforms.sourceOffset.x,
+                    m.y * upright.x + m.w * upright.y + uniforms.sourceOffset.y);
+    out.frameUV = local;
     return out;
 }
 
@@ -133,10 +150,9 @@ fragment float4 layer_fragment(
 ) {
     float4 color = source.sample(textureSampler, in.uv);
     color.rgb = applyGrade(color.rgb, uniforms.grade);
-    // Effects use the *destination* position, not the source crop — a vignette belongs to the
+    // Effects use the *frame* position, not the source crop — a vignette belongs to the
     // frame, not to whatever region of the photo happens to be showing through it.
-    float2 framePosition = (in.uv - uniforms.sourceCrop.xy) / max(uniforms.sourceCrop.zw, 1e-5);
-    color.rgb = applyEffects(color.rgb, framePosition, uniforms.effects);
+    color.rgb = applyEffects(color.rgb, in.frameUV, uniforms.effects);
     color *= uniforms.opacity;   // premultiplied: scale rgb and a together
     return color;
 }

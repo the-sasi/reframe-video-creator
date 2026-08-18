@@ -114,10 +114,11 @@ struct EditorView: View {
         }
         .onChange(of: document.revision) { _, _ in
             engine.timeline = document.timeline
+        }
+        .onChange(of: model.assets) { _, pool in
             // The pool may have gained a track since the engine was built; without this the
-            // preview stays silent after adding music.
-            engine.currentAssetPool = model.assets
-            engine.updateAssets(model.assets)
+            // preview stays silent after adding music. Textures for unchanged assets survive.
+            engine.updateAssets(pool)
         }
         .sheet(isPresented: $showsAudioSheet) {
             AudioSheet(document: document)
@@ -242,7 +243,7 @@ struct EditorView: View {
         document.perform(
             .splitClip(
                 id: clip.id, atLocalTime: localTime,
-                newClipID: UUID(), wasDuration: clip.duration
+                newClipID: UUID(), wasDuration: clip.duration, wasCropEnd: clip.cropEnd
             )
         )
         Haptics.grab()
@@ -305,7 +306,6 @@ struct EditorView: View {
             timeline: document.timeline,
             assets: model.assets
         )
-        engine.currentAssetPool = model.assets
         self.engine = engine
     }
 }

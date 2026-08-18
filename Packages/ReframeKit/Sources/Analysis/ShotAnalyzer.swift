@@ -28,6 +28,9 @@ public struct ShotAnalyzer: Sendable {
     public struct ShotVisuals: Sendable {
         public var motion: FittedMotion
         public var salientAreaFraction: Double?
+        /// Mean salient region across sampled frames — where the subject sat. This is what
+        /// the binder uses to place the user's subject in the same spot.
+        public var subjectRect: RecipeCore.NormalizedRect?
         public var palette: ScenePalette
     }
 
@@ -37,12 +40,14 @@ public struct ShotAnalyzer: Sendable {
         guard !frames.isEmpty else { return nil }
 
         async let motion = fitMotion(across: frames)
-        async let saliency = meanSalientArea(in: frames)
+        async let saliency = meanSalientRegion(in: frames)
         let palette = palette(from: frames)
 
+        let region = await saliency
         return ShotVisuals(
             motion: await motion,
-            salientAreaFraction: await saliency,
+            salientAreaFraction: region.map { min(1, $0.area) },
+            subjectRect: region,
             palette: palette
         )
     }
@@ -195,7 +200,20 @@ public struct ShotAnalyzer: Sendable {
         }
 
         guard source.count >= 8 else { return nil }
-        return SimilarityFit.fit(source: source, target: target)
+        var fit = SimilarityFit.fit(source: source, target: target)
+
+        // Re-express the translation as the displacement of the frame *centre*.
+        //
+        // The raw fit's translation is measured about the origin — the top-left corner — so a
+        // pure zoom about the middle of the frame reports a large translation (the corner
+        // moves even though the centre does not). Classifying on that made every zoom over
+        // ~6% read as "several things at once" and fall back to a static shot. The centre's
+        // motion is what a viewer perceives as the pan.
+        let centre = SIMD2<Double>(0.5, 0.5 * Double(height) / Double(width))
+        let moved = fit.apply(to: centre)
+        fit.translationX = moved.x - centre.x
+        fit.translationY = moved.y - centre.y
+        return fit
     }
 
     private func translationalFallback(from a: CGImage, to b: CGImage) -> SimilarityFit? {
@@ -223,10 +241,12 @@ public struct ShotAnalyzer: Sendable {
 
     // MARK: - Saliency
 
-    /// Mean fraction of frame area occupied by salient regions, across sampled frames.
-    /// Feeds `ShotFraming(salientAreaFraction:)` — this is how "close-up vs wide" is decided.
-    private func meanSalientArea(in frames: [CGImage]) async -> Double? {
-        var fractions: [Double] = []
+    /// Mean salient region across sampled frames: the union of Vision's salient boxes per
+    /// frame, averaged. Its area feeds `ShotFraming(salientAreaFraction:)` — this is how
+    /// "close-up vs wide" is decided — and its position is where the subject sat, which is what
+    /// composition transfer needs.
+    private func meanSalientRegion(in frames: [CGImage]) async -> RecipeCore.NormalizedRect? {
+        var rects: [RecipeCore.NormalizedRect] = []
 
         for frame in frames {
             if Task.isCancelled { break }
@@ -248,13 +268,17 @@ public struct ShotAnalyzer: Sendable {
                 )
                 union = union.map { $0.union(rect) } ?? rect
             }
-            if let union {
-                fractions.append(min(1, union.area))
-            }
+            if let union { rects.append(union) }
         }
 
-        guard !fractions.isEmpty else { return nil }
-        return fractions.reduce(0, +) / Double(fractions.count)
+        guard !rects.isEmpty else { return nil }
+        let n = Double(rects.count)
+        return RecipeCore.NormalizedRect(
+            x: rects.map(\.x).reduce(0, +) / n,
+            y: rects.map(\.y).reduce(0, +) / n,
+            width: rects.map(\.width).reduce(0, +) / n,
+            height: rects.map(\.height).reduce(0, +) / n
+        ).clampedInsideUnitSquare()
     }
 
     // MARK: - Palette

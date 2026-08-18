@@ -290,7 +290,7 @@ struct ExportView: View {
     private var sizeBinding: Binding<SizeOption> {
         Binding(
             get: {
-                switch model.exportSettings.width {
+                switch model.exportSettings.shortSideTier {
                 case 720: return .hd720
                 case 2160: return .uhd4K
                 default: return .hd1080
@@ -299,14 +299,17 @@ struct ExportView: View {
             set: { option in
                 let fps = model.exportSettings.fps
                 let hevc = model.exportSettings.preferHEVC
+                let quality = model.exportSettings.quality
+                let canvas = model.document?.timeline.canvas ?? .reel1080
+                let tier: Int
                 switch option {
-                case .hd720:
-                    model.exportSettings = ExportSettings(width: 720, height: 1280, fps: fps, preferHEVC: hevc)
-                case .hd1080:
-                    model.exportSettings = ExportSettings(width: 1080, height: 1920, fps: fps, preferHEVC: hevc)
-                case .uhd4K:
-                    model.exportSettings = ExportSettings(width: 2160, height: 3840, fps: fps, preferHEVC: hevc)
+                case .hd720: tier = 720
+                case .hd1080: tier = 1080
+                case .uhd4K: tier = 2160
                 }
+                var settings = ExportSettings.matching(canvas: canvas, shortSide: tier, preferHEVC: hevc, quality: quality)
+                settings.fps = fps
+                model.exportSettings = settings
             }
         )
     }

@@ -35,6 +35,9 @@ final class AppModel {
     var document: TimelineDocument?
     var exportSettings: ExportSettings = .default
 
+    /// How much of the reference to reproduce. Chosen on the summary screen.
+    var fidelity: BindingFidelity = .closeMatch
+
     /// Whether to apply the reference's inferred colour to your photos.
     ///
     /// Off by default and deliberately so: an automatic grade applied to somebody else's
@@ -50,6 +53,10 @@ final class AppModel {
     /// reference would collide and the second would silently overwrite the first. Determinism
     /// is right for recipe content and wrong for project identity.
     var currentProjectID = UUID()
+    var projectTitle: String?
+    var projectCreatedAt: Date?
+    var projectIsFavorite = false
+    var projectThumbnailPath: String?
 
     /// Recent projects for the Continue strip.
     var recentProjects: [ProjectSummary] = []
@@ -89,6 +96,11 @@ final class AppModel {
         assetFeatures = [:]
         document = nil
         currentProjectID = UUID()
+        projectTitle = nil
+        projectCreatedAt = nil
+        projectIsFavorite = false
+        projectThumbnailPath = nil
+        fidelity = .closeMatch
     }
 
     /// Builds a timeline with no recipe — the "Start From Scratch" path.
@@ -129,9 +141,7 @@ final class AppModel {
         }
 
         document = TimelineDocument(timeline: timeline)
-        exportSettings = ExportSettings(
-            width: canvas.width, height: canvas.height, fps: canvas.fps, preferHEVC: true
-        )
+        exportSettings = ExportSettings.matching(canvas: canvas, shortSide: 1080)
         DiagnosticsLog.shared.info(
             "app", "scratch timeline: \(timeline.clips.count) clips, \(String(format: "%.1fs", timeline.duration))"
         )
@@ -164,8 +174,24 @@ final class AppModel {
             recipe: recipe,
             assets: assets,
             features: assetFeatures,
-            shuffleSeed: shuffleSeed
+            shuffleSeed: shuffleSeed,
+            locked: assignment
         )
+    }
+
+    /// Pins or unpins a slot. Pinned slots survive Auto Arrange and Shuffle untouched.
+    func setSlotLocked(_ locked: Bool, slotID: String) {
+        assignment.setLocked(locked, slotID: slotID)
+        if locked { assignment.reasonBySlot[slotID] = "pinned by you" }
+    }
+
+    /// Where each asset's subject sits, for the binder's smart crop.
+    var subjectRects: [UUID: NormalizedRect] {
+        var rects: [UUID: NormalizedRect] = [:]
+        for (id, features) in assetFeatures {
+            if let rect = features.salientRect { rects[id] = rect }
+        }
+        return rects
     }
 
     /// Builds the concrete document from the recipe, assets and words.
@@ -180,7 +206,9 @@ final class AppModel {
                 canvas: nil,
                 respectBeatGrid: true,
                 allowAssetReuse: true,
-                applyGrade: matchReferenceLook
+                applyGrade: matchReferenceLook,
+                fidelity: fidelity,
+                subjectRects: subjectRects
             )
         )
         if let document {
@@ -188,12 +216,7 @@ final class AppModel {
         } else {
             document = TimelineDocument(timeline: timeline)
         }
-        exportSettings = ExportSettings(
-            width: timeline.canvas.width,
-            height: timeline.canvas.height,
-            fps: timeline.canvas.fps,
-            preferHEVC: true
-        )
+        exportSettings = ExportSettings.matching(canvas: timeline.canvas, shortSide: 1080)
     }
 
     // MARK: - Persistence
@@ -203,13 +226,18 @@ final class AppModel {
         guard let document else { return }
         let project = Project(
             id: currentProjectID,
-            title: recipe?.title ?? "Untitled",
+            title: projectTitle ?? recipe?.title ?? "Untitled",
+            createdAt: projectCreatedAt ?? Date(),
             timeline: document.timeline,
             assets: assets,
             content: content,
             assignment: assignment,
             recipeID: recipe?.id,
-            exportSettings: exportSettings
+            exportSettings: exportSettings,
+            assetFeatures: assetFeatures,
+            fidelity: fidelity,
+            isFavorite: projectIsFavorite,
+            thumbnailPath: projectThumbnailPath
         )
         do {
             try await projectStore.save(project, history: document.history)
@@ -224,9 +252,15 @@ final class AppModel {
         do {
             let project = try await projectStore.load(id: id)
             currentProjectID = project.id
+            projectTitle = project.title
+            projectCreatedAt = project.createdAt
+            projectIsFavorite = project.isFavorite
+            projectThumbnailPath = project.thumbnailPath
             assets = project.assets
             content = project.content
             assignment = project.assignment
+            assetFeatures = project.assetFeatures
+            fidelity = project.fidelity
             exportSettings = project.exportSettings
 
             // A project can outlive its recipe — the user may have deleted the style. That is

@@ -48,6 +48,12 @@ let package = Package(
             dependencies: ["RecipeCore", "MediaIO", "Analysis", "Mapping", "Rendering", "Intelligence"]
         ),
 
+        // A Foundation-only assertion harness over RecipeCore, runnable with the Windows
+        // toolchain (`swift run CoreCheck`) where the real test target cannot build because it
+        // links AVFoundation. Not a substitute for ReframeKitTests — a ten-second local loop for
+        // the binder, commands and mix planner while iterating without a Mac.
+        .executableTarget(name: "CoreCheck", dependencies: ["RecipeCore"], path: "Tools/CoreCheck"),
+
         // Depends on each module directly, not just the umbrella. `@testable import ReframeKit`
         // only grants internal access to ReframeKit itself — re-exported modules keep their
         // own access control, so the tests could not reach `AudioAnalyzer.estimateTempo` and

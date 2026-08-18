@@ -20,6 +20,12 @@ public enum ReframeError: Error, Sendable, Hashable {
     case photosAccessDenied
     case photosAddOnlyDenied
     case fileAccessDenied(name: String)
+    case microphoneDenied
+
+    // Audio
+    case recordingFailed(detail: String)
+    case audioExtractionFailed(detail: String)
+    case transcriptionUnavailable(reason: String)
 
     // Resources
     case insufficientStorage(neededBytes: Int64, availableBytes: Int64)
@@ -138,6 +144,30 @@ public enum ReframeError: Error, Sendable, Hashable {
                 message: "Permission to read this file has expired. Pick it again from Files.",
                 recovery: .chooseDifferentFile
             )
+        case .microphoneDenied:
+            return .init(
+                title: "Microphone access is off",
+                message: "Reframe needs the microphone to record a voiceover. The recording stays on this iPhone.",
+                recovery: .openSettings
+            )
+        case .recordingFailed:
+            return .init(
+                title: "Recording didn't work",
+                message: "The voiceover couldn't be saved. Check that another app isn't using the microphone and try again.",
+                recovery: .retry
+            )
+        case .audioExtractionFailed:
+            return .init(
+                title: "Couldn't extract the audio",
+                message: "The soundtrack couldn't be read from this video. Some files carry protected or unusual audio that iPhone can't decode.",
+                recovery: .dismiss
+            )
+        case .transcriptionUnavailable(let reason):
+            return .init(
+                title: "Captions aren't available",
+                message: reason,
+                recovery: .dismiss
+            )
         case .insufficientStorage(let needed, let available):
             let neededMB = needed / 1_000_000
             let availableMB = available / 1_000_000
@@ -223,7 +253,8 @@ public enum ReframeError: Error, Sendable, Hashable {
     public var logDetail: String {
         switch self {
         case .unsupportedFormat(let d), .corruptMedia(let d), .renderSetupFailed(let d),
-             .exportFailed(let d), .documentCorrupt(let d):
+             .exportFailed(let d), .documentCorrupt(let d), .recordingFailed(let d),
+             .audioExtractionFailed(let d), .transcriptionUnavailable(let d):
             return d
         case .analysisFailed(let stage, let d):
             return "\(stage): \(d)"

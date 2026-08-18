@@ -45,13 +45,15 @@ public struct DetectedShot: Sendable, Hashable {
     public var motionEnergy: Double
     /// Mean salient-region area across sampled frames, for shot-scale classification.
     public var salientAreaFraction: Double?
+    /// Mean salient region — where the subject sat. Drives composition transfer.
+    public var subjectRect: NormalizedRect?
 
     public var duration: Double { max(0, end - start) }
 
     public init(
         index: Int, start: Double, end: Double, boundaryIn: DetectedBoundary,
         motion: FittedMotion? = nil, motionEnergy: Double = 0,
-        salientAreaFraction: Double? = nil
+        salientAreaFraction: Double? = nil, subjectRect: NormalizedRect? = nil
     ) {
         self.index = index
         self.start = start
@@ -60,6 +62,7 @@ public struct DetectedShot: Sendable, Hashable {
         self.motion = motion
         self.motionEnergy = motionEnergy
         self.salientAreaFraction = salientAreaFraction
+        self.subjectRect = subjectRect
     }
 }
 
@@ -142,27 +145,45 @@ public struct FittedMotion: Sendable, Hashable {
 
     /// Classifies the fit into a named move. Thresholds are deliberately generous — a 3% zoom
     /// over a one-second shot is not a push-in, it is noise in the fit.
+    ///
+    /// Translation here is the displacement of the frame *centre* (see `ShotAnalyzer`), so a
+    /// zoom about the middle of the frame contributes none. Directions are named for the
+    /// **camera**: content sliding right on screen means the camera panned left.
     public var kind: CameraMoveKind {
         let zoomMagnitude = abs(scale - 1)
         let panMagnitude = max(abs(translationX), abs(translationY))
         let rotationMagnitude = abs(rotationRadians)
 
-        // Several things happening at once is not a nameable move.
-        let significant = [zoomMagnitude > 0.06, panMagnitude > 0.05, rotationMagnitude > 0.05]
-            .filter { $0 }.count
-        if significant > 1 { return .complex }
+        // A dominant zoom with a little drift is still a zoom; a dominant pan with a little
+        // scale wobble is still a pan. Only genuinely mixed motion is "complex".
+        let zoomSignificant = zoomMagnitude > 0.06
+        let panSignificant = panMagnitude > 0.05
+        let rotationSignificant = rotationMagnitude > 0.05
 
-        if zoomMagnitude > 0.06 {
-            return scale > 1 ? .zoomIn : .zoomOut
-        }
-        if panMagnitude > 0.05 {
-            if abs(translationX) >= abs(translationY) {
-                return translationX > 0 ? .panRight : .panLeft
+        if rotationSignificant, !zoomSignificant, !panSignificant { return .rotate }
+        if rotationSignificant { return .complex }
+
+        if zoomSignificant, panSignificant {
+            // Compare in comparable units: a 10% zoom moves the frame edge 5% of the width.
+            let zoomAsShift = zoomMagnitude / 2
+            if zoomAsShift > panMagnitude * 1.6 {
+                return scale > 1 ? .zoomIn : .zoomOut
             }
-            return translationY > 0 ? .panDown : .panUp
+            if panMagnitude > zoomAsShift * 1.6 {
+                return panDirection
+            }
+            return .complex
         }
-        if rotationMagnitude > 0.05 { return .rotate }
+        if zoomSignificant { return scale > 1 ? .zoomIn : .zoomOut }
+        if panSignificant { return panDirection }
         return .none
+    }
+
+    private var panDirection: CameraMoveKind {
+        if abs(translationX) >= abs(translationY) {
+            return translationX > 0 ? .panLeft : .panRight
+        }
+        return translationY > 0 ? .panUp : .panDown
     }
 
     /// Confidence from fit quality and sample count. A clean fit over many pairs is trustworthy;

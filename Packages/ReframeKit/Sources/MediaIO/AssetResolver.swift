@@ -12,7 +12,20 @@ import UIKit
 /// and only one of them has a `cgImage` property. The engine builds for macOS so `swift test`
 /// can run without a simulator, so this has to work on both.
 extension UIImage {
-    var platformCGImage: CGImage? { cgImage }
+    /// The bitmap, *upright*. `cgImage` ignores `imageOrientation`, and PhotoKit can hand back
+    /// an image whose orientation lives in that flag rather than in the pixels — so a photo
+    /// taken in portrait would render on its side. Redraw when needed; the common case (already
+    /// `.up`) costs nothing.
+    var platformCGImage: CGImage? {
+        guard imageOrientation != .up else { return cgImage }
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = false
+        let rendered = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            draw(in: CGRect(origin: .zero, size: size))
+        }
+        return rendered.cgImage
+    }
 }
 #elseif canImport(AppKit)
 import AppKit

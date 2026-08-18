@@ -28,6 +28,15 @@ public struct AssetMapper: Sendable {
         public var adjacentSimilarity: Double
         /// Feature-print distance below which two assets are "near-duplicates".
         public var duplicateDistanceThreshold: Double
+        /// Penalty for soft focus, scaled by (1 - sharpness).
+        public var softness: Double
+        /// Gentle preference for keeping the user's photos in the order they were taken. A
+        /// tie-breaker, not a rule — a travel sequence stays chronological unless something
+        /// clearly fits a slot better out of order.
+        public var chronology: Double
+        /// Mild preference for an asset whose subject sits where the reference's did. The
+        /// binder re-anchors the crop around the subject anyway, so this only nudges.
+        public var subjectPosition: Double
 
         public init(
             framingMismatch: Double = 1.0,
@@ -38,7 +47,10 @@ public struct AssetMapper: Sendable {
             insufficientDuration: Double = 1.2,
             reusePenalty: Double = 2.5,
             adjacentSimilarity: Double = 1.5,
-            duplicateDistanceThreshold: Double = 0.55
+            duplicateDistanceThreshold: Double = 0.55,
+            softness: Double = 0.45,
+            chronology: Double = 0.3,
+            subjectPosition: Double = 0.2
         ) {
             self.framingMismatch = framingMismatch
             self.aesthetics = aesthetics
@@ -49,6 +61,9 @@ public struct AssetMapper: Sendable {
             self.reusePenalty = reusePenalty
             self.adjacentSimilarity = adjacentSimilarity
             self.duplicateDistanceThreshold = duplicateDistanceThreshold
+            self.softness = softness
+            self.chronology = chronology
+            self.subjectPosition = subjectPosition
         }
 
         public static let `default` = Weights()
@@ -69,22 +84,55 @@ public struct AssetMapper: Sendable {
         features: [UUID: AssetFeatures],
         /// Varies the diversity refinement without changing the cost model, so "Shuffle" gives
         /// a genuinely different-but-still-good arrangement rather than a random one.
-        shuffleSeed: Int = 0
+        shuffleSeed: Int = 0,
+        /// Slots the user has pinned, with their current asset. Left untouched; the solver
+        /// works around them.
+        locked: AssetAssignment = AssetAssignment()
     ) -> AssetAssignment {
-        let slots = recipe.scenes
+        let allSlots = recipe.scenes
         let candidates = assets.visuals
-        guard !slots.isEmpty, !candidates.isEmpty else { return AssetAssignment() }
+        guard !allSlots.isEmpty, !candidates.isEmpty else { return AssetAssignment() }
+
+        // Pinned slots keep exactly what they have. Everything below solves the remainder.
+        var result = AssetAssignment()
+        var lockedAssetUse: [UUID: Int] = [:]
+        for scene in allSlots where locked.isLocked(scene.slot.id) {
+            if let assetID = locked[scene.slot.id], assets[assetID] != nil {
+                result.assetBySlot[scene.slot.id] = assetID
+                result.reasonBySlot[scene.slot.id] = "pinned by you"
+                result.lockedSlots.insert(scene.slot.id)
+                lockedAssetUse[assetID, default: 0] += 1
+            }
+        }
+        let slots = allSlots.filter { !result.isLocked($0.slot.id) }
+        guard !slots.isEmpty else { return result }
+
+        // Chronological rank of each asset, for the ordering tie-breaker.
+        let chronological = candidates
+            .enumerated()
+            .sorted { lhs, rhs in
+                switch (lhs.element.creationDate, rhs.element.creationDate) {
+                case let (a?, b?) where a != b: return a < b
+                default: return lhs.offset < rhs.offset
+                }
+            }
+            .map { $0.element.id }
+        var chronoRank: [UUID: Double] = [:]
+        for (index, id) in chronological.enumerated() {
+            chronoRank[id] = candidates.count > 1 ? Double(index) / Double(candidates.count - 1) : 0.5
+        }
 
         // When there are fewer assets than slots, repeat the asset list. Each repetition costs
         // `reusePenalty` more, so the solver exhausts fresh photos before reusing any, and
-        // reuses the *best* ones when it must.
-        let repeats = max(1, Int(ceil(Double(slots.count) / Double(candidates.count))))
+        // reuses the *best* ones when it must. Assets already pinned elsewhere start one
+        // repetition in — they have been used once.
+        let repeats = max(1, Int(ceil(Double(slots.count) / Double(candidates.count))) + (lockedAssetUse.isEmpty ? 0 : 1))
         var columnAsset: [AssetReference] = []
         var columnRepeat: [Int] = []
         for r in 0..<repeats {
             for asset in candidates {
                 columnAsset.append(asset)
-                columnRepeat.append(r)
+                columnRepeat.append(r + (lockedAssetUse[asset.id] ?? 0))
             }
         }
 
@@ -92,15 +140,21 @@ public struct AssetMapper: Sendable {
             repeating: [Double](repeating: 0, count: columnAsset.count),
             count: slots.count
         )
+        let slotSpan = max(1, allSlots.count - 1)
         for (row, scene) in slots.enumerated() {
+            let slotPosition = Double(scene.index) / Double(slotSpan)
             for column in columnAsset.indices {
                 let asset = columnAsset[column]
-                cost[row][column] = pairCost(
+                var value = pairCost(
                     scene: scene,
                     canvas: recipe.canvas,
                     asset: asset,
                     features: features[asset.id]
                 ) + Double(columnRepeat[column]) * weights.reusePenalty
+                if let rank = chronoRank[asset.id] {
+                    value += abs(rank - slotPosition) * weights.chronology
+                }
+                cost[row][column] = value
             }
         }
 
@@ -113,7 +167,6 @@ public struct AssetMapper: Sendable {
             seed: shuffleSeed
         )
 
-        var result = AssetAssignment()
         for (row, column) in assignment.enumerated() where column >= 0 {
             let scene = slots[row]
             let asset = columnAsset[column]
@@ -169,6 +222,20 @@ public struct AssetMapper: Sendable {
         // that contains nothing else still produces a video.
         if features?.isUtility == true {
             cost += weights.utilityPenalty
+        }
+
+        // Soft focus. Weighted like aesthetics: hard on the shots people look at.
+        if let sharpness = features?.sharpness {
+            let weight = scene.role.value == .hero ? weights.softness * 1.8 : weights.softness
+            cost += (1 - sharpness) * weight
+        }
+
+        // Subject placement. Only when both sides know where their subject is.
+        if let assetSubject = features?.salientRect,
+           let slotSubject = scene.slot.subjectRect, slotSubject.confidence >= 0.4 {
+            let dx = assetSubject.centerX - slotSubject.value.centerX
+            let dy = assetSubject.centerY - slotSubject.value.centerY
+            cost += min(1, (dx * dx + dy * dy).squareRoot()) * weights.subjectPosition
         }
 
         // --- Framing loss ---
@@ -282,9 +349,9 @@ public struct AssetMapper: Sendable {
         // The same photo twice in a row is always wrong, regardless of feature prints.
         if a.id == b.id { return weights.adjacentSimilarity * 2 }
 
-        guard let printA = features[a.id]?.featurePrint,
-              let printB = features[b.id]?.featurePrint,
-              let distance = printA.distance(to: printB) else { return 0 }
+        guard let featuresA = features[a.id],
+              let featuresB = features[b.id],
+              let distance = featuresA.featureDistance(to: featuresB) else { return 0 }
 
         guard distance < weights.duplicateDistanceThreshold else { return 0 }
         // Ramp: identical images cost the full penalty, marginally-similar ones cost little.
@@ -311,6 +378,12 @@ public struct AssetMapper: Sendable {
         }
         if let score = features?.aestheticScore, score > 0.35 {
             parts.append("high quality")
+        }
+        if let sharpness = features?.sharpness, sharpness < 0.35 {
+            parts.append("a little soft")
+        }
+        if let faces = features?.faceCount, faces > 0 {
+            parts.append(faces == 1 ? "face" : "\(faces) faces")
         }
         if scene.role.value == .hero {
             parts.append("best available for hero")

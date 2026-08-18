@@ -67,7 +67,9 @@ public struct RecipeCompiler: Sendable {
             audio: audioPlan,
             palette: analysis.palette,
             stats: stats,
-            confidence: rollUpConfidence(scenes: scenes, textSlots: textSlots, audio: analysis.audio)
+            confidence: rollUpConfidence(scenes: scenes, textSlots: textSlots, audio: analysis.audio),
+            tags: nil,
+            isBuiltIn: false
         )
     }
 
@@ -135,6 +137,16 @@ public struct RecipeCompiler: Sendable {
             )
         }
 
+        let subjectRect: Confident<NormalizedRect>? = shot.subjectRect.map { rect in
+            Confident(
+                rect, confidence: 0.66,
+                basis: String(
+                    format: "salient region centred (%.2f, %.2f), %.0f%% of frame",
+                    rect.centerX, rect.centerY, rect.area * 100
+                )
+            )
+        }
+
         return SceneTemplate(
             id: ids.string("scene", index + 1),
             index: index,
@@ -145,7 +157,8 @@ public struct RecipeCompiler: Sendable {
             slot: AssetSlot(
                 id: slotID,
                 framing: framing,
-                motionEnergy: shot.motionEnergy
+                motionEnergy: shot.motionEnergy,
+                subjectRect: subjectRect
             ),
             move: move,
             transitionIn: transition,
@@ -176,30 +189,44 @@ public struct RecipeCompiler: Sendable {
                 startRect: .full, endRect: .full, easing: .linear, safeFallback: .none
             )
 
-        case .zoomIn, .zoomOut:
-            // Clamp: a measured 3x zoom is a fit failure, and applying it to a photo would
-            // magnify a handful of pixels to full screen.
-            let cropRatio = min(1.6, max(0.62, 1 / motion.scale))
-            let (start, end): (NormalizedRect, NormalizedRect) = kind == .zoomIn
-                ? (.full, NormalizedRect.full.scaled(by: cropRatio))
-                : (NormalizedRect.full.scaled(by: min(1.0, cropRatio)), .full)
+        case .zoomIn:
+            // Content grew by `scale`, so the crop must shrink by 1/scale. Clamp: a measured
+            // 3x zoom is a fit failure, and applying it to a photo would magnify a handful of
+            // pixels to full screen.
+            let cropRatio = min(0.98, max(0.62, 1 / motion.scale))
             return CameraMove(
                 kind: Confident(kind, confidence: confidence, basis: basis),
-                startRect: start.clampedInsideUnitSquare(),
-                endRect: end.clampedInsideUnitSquare(),
+                startRect: .full,
+                endRect: NormalizedRect.full.scaled(by: cropRatio).clampedInsideUnitSquare(),
+                easing: .easeInOut,
+                safeFallback: .none
+            )
+
+        case .zoomOut:
+            // Content shrank by `scale` (< 1): start tight, end full. An earlier version
+            // clamped this to `min(1, 1/scale)` = 1 and every pull-out compiled to a static shot.
+            let startRatio = min(0.98, max(0.62, motion.scale))
+            return CameraMove(
+                kind: Confident(kind, confidence: confidence, basis: basis),
+                startRect: NormalizedRect.full.scaled(by: startRatio).clampedInsideUnitSquare(),
+                endRect: .full,
                 easing: .easeInOut,
                 safeFallback: .none
             )
 
         case .panLeft, .panRight, .panUp, .panDown:
             // Panning needs headroom: crop in slightly so there is somewhere to pan *to*.
+            //
+            // The measured translation is how far *content* moved across the frame; the crop
+            // window must travel the opposite way to reproduce that. Content sliding right on
+            // screen is a window moving left over the photo.
             let base = NormalizedRect.full.scaled(by: 0.88)
             let dx = min(0.10, max(-0.10, motion.translationX)) / 2
             let dy = min(0.10, max(-0.10, motion.translationY)) / 2
             return CameraMove(
                 kind: Confident(kind, confidence: confidence, basis: basis),
-                startRect: base.offset(dx: -dx, dy: -dy).clampedInsideUnitSquare(),
-                endRect: base.offset(dx: dx, dy: dy).clampedInsideUnitSquare(),
+                startRect: base.offset(dx: dx, dy: dy).clampedInsideUnitSquare(),
+                endRect: base.offset(dx: -dx, dy: -dy).clampedInsideUnitSquare(),
                 easing: .easeInOut,
                 safeFallback: .none
             )

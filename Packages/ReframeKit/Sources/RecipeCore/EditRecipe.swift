@@ -29,6 +29,12 @@ public struct EditRecipe: Codable, Sendable, Hashable, Identifiable {
     public var palette: Palette
     public var stats: RecipeStats
     public var confidence: ConfidenceReport
+    /// Library categories ("Product", "Fast Reel", …). Optional so recipes written before the
+    /// template library existed still decode.
+    public var tags: [String]?
+    /// True for the built-in starter templates; nil or false for anything analysed from a
+    /// reference. The library uses this to separate "yours" from "starters".
+    public var isBuiltIn: Bool?
 
     public init(
         schemaVersion: Int = RecipeSchema.current,
@@ -44,7 +50,9 @@ public struct EditRecipe: Codable, Sendable, Hashable, Identifiable {
         audio: AudioPlan,
         palette: Palette,
         stats: RecipeStats,
-        confidence: ConfidenceReport
+        confidence: ConfidenceReport,
+        tags: [String]? = nil,
+        isBuiltIn: Bool? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -60,6 +68,22 @@ public struct EditRecipe: Codable, Sendable, Hashable, Identifiable {
         self.palette = palette
         self.stats = stats
         self.confidence = confidence
+        self.tags = tags
+        self.isBuiltIn = isBuiltIn
+    }
+
+    /// Category chips for the library. Falls back to something derived from the stats when a
+    /// recipe was analysed before tags existed, so nothing shows up unclassified.
+    public var displayTags: [String] {
+        if let tags, !tags.isEmpty { return tags }
+        var derived: [String] = []
+        if stats.medianSceneDuration < 0.8 { derived.append("Fast Reel") }
+        else if stats.medianSceneDuration > 2.0 { derived.append("Slideshow") }
+        if beatGrid?.cutsAlignedToBeats.value == true { derived.append("Beat Sync") }
+        if stats.textSlotCount >= 3 { derived.append("Text Heavy") }
+        if stats.transitionCount == 0 { derived.append("Minimal") }
+        if derived.isEmpty { derived.append("Reference") }
+        return derived
     }
 
     /// How many user assets this recipe wants. Drives the "add 12 photos" prompt.
@@ -209,15 +233,21 @@ public struct AssetSlot: Codable, Sendable, Hashable, Identifiable {
     /// Free-text hint from the optional intelligence provider, e.g. "product close-up".
     /// Presentation only — the scorer does not read it.
     public var preferSubject: String?
+    /// Where the reference's subject sat in the frame, normalised. This is what lets the binder
+    /// put the *user's* subject in the same place — composition transfer rather than a centred
+    /// crop. Nil when saliency found nothing.
+    public var subjectRect: Confident<NormalizedRect>?
 
     public init(
         id: String, framing: Confident<ShotFraming>,
-        motionEnergy: Double, preferSubject: String? = nil
+        motionEnergy: Double, preferSubject: String? = nil,
+        subjectRect: Confident<NormalizedRect>? = nil
     ) {
         self.id = id
         self.framing = framing
         self.motionEnergy = motionEnergy
         self.preferSubject = preferSubject
+        self.subjectRect = subjectRect
     }
 }
 

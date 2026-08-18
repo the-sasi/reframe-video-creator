@@ -12,7 +12,10 @@ public enum EditCommand: Codable, Sendable, Hashable {
     // MARK: Clips
     case trimClip(id: UUID, duration: Double, sourceStart: Double,
                   wasDuration: Double, wasSourceStart: Double)
-    case splitClip(id: UUID, atLocalTime: Double, newClipID: UUID, wasDuration: Double)
+    /// `wasCropEnd` is what the split rewrote: the first half's crop now ends at the split
+    /// point, and reverting the duration alone left the Ken Burns move visibly changed.
+    case splitClip(id: UUID, atLocalTime: Double, newClipID: UUID,
+                   wasDuration: Double, wasCropEnd: NormalizedRect)
     case deleteClip(index: Int, clip: VideoClip)
     case insertClip(index: Int, clip: VideoClip)
     case moveClip(from: Int, to: Int)
@@ -24,6 +27,7 @@ public enum EditCommand: Codable, Sendable, Hashable {
     case setClipEffects(id: UUID, vignette: Double, grain: Double,
                         wasVignette: Double, wasGrain: Double)
     case setClipVolume(id: UUID, volume: Double, wasVolume: Double)
+    case setClipFit(id: UUID, fitMode: FitMode, wasFitMode: FitMode)
     case setTransition(clipID: UUID, transition: Transition?, wasTransition: Transition?)
 
     // MARK: Text
@@ -33,17 +37,26 @@ public enum EditCommand: Codable, Sendable, Hashable {
     case setTextFrame(id: UUID, frame: NormalizedRect, wasFrame: NormalizedRect)
     case setTextTiming(id: UUID, start: Double, end: Double, wasStart: Double, wasEnd: Double)
     case setTextStyle(id: UUID, style: TextLayerStyle, wasStyle: TextLayerStyle)
+    case setTextWordTimings(id: UUID, timings: [Double]?, wasTimings: [Double]?)
 
     // MARK: Audio & overlays
     case addAudioClip(clip: AudioClip)
     case deleteAudioClip(index: Int, clip: AudioClip)
     case setAudioVolume(id: UUID, volume: Double, wasVolume: Double)
+    case setAudioFades(id: UUID, fadeIn: Double, fadeOut: Double, wasFadeIn: Double, wasFadeOut: Double)
+    case setAudioMuted(id: UUID, isMuted: Bool, wasMuted: Bool)
+    /// Move and/or trim in one step: `start` is the timeline position, `sourceStart` the offset
+    /// into the file, `duration` how much of it plays.
+    case retimeAudioClip(id: UUID, start: Double, duration: Double, sourceStart: Double,
+                         wasStart: Double, wasDuration: Double, wasSourceStart: Double)
+    case setDucking(enabled: Bool, wasEnabled: Bool)
     case addOverlay(layer: OverlayLayer)
     case deleteOverlay(index: Int, layer: OverlayLayer)
     case setOverlayFrame(id: UUID, frame: NormalizedRect, wasFrame: NormalizedRect)
 
     // MARK: Document
     case setCanvas(canvas: CanvasSpec, wasCanvas: CanvasSpec)
+    case setBackground(hex: String, wasHex: String)
 
     /// Shown in the undo affordance: "Undo Trim Clip".
     public var name: String {
@@ -59,6 +72,7 @@ public enum EditCommand: Codable, Sendable, Hashable {
         case .setClipGrade: return "Adjust Colour"
         case .setClipEffects: return "Adjust Effects"
         case .setClipVolume: return "Change Volume"
+        case .setClipFit: return "Change Fit"
         case .setTransition: return "Change Transition"
         case .addTextLayer: return "Add Text"
         case .deleteTextLayer: return "Delete Text"
@@ -66,13 +80,19 @@ public enum EditCommand: Codable, Sendable, Hashable {
         case .setTextFrame: return "Move Text"
         case .setTextTiming: return "Retime Text"
         case .setTextStyle: return "Style Text"
+        case .setTextWordTimings: return "Retime Words"
         case .addAudioClip: return "Add Audio"
         case .deleteAudioClip: return "Remove Audio"
         case .setAudioVolume: return "Change Volume"
+        case .setAudioFades: return "Change Fades"
+        case .setAudioMuted: return "Mute Audio"
+        case .retimeAudioClip: return "Move Audio"
+        case .setDucking: return "Change Ducking"
         case .addOverlay: return "Add Logo"
         case .deleteOverlay: return "Remove Logo"
         case .setOverlayFrame: return "Move Logo"
         case .setCanvas: return "Change Size"
+        case .setBackground: return "Change Background"
         }
     }
 
@@ -91,6 +111,8 @@ public enum EditCommand: Codable, Sendable, Hashable {
         case .setTextTiming(let id, _, _, _, _): return "texttime:\(id)"
         case .setTextContent(let id, _, _): return "textcontent:\(id)"
         case .setAudioVolume(let id, _, _): return "audiovol:\(id)"
+        case .setAudioFades(let id, _, _, _, _): return "audiofade:\(id)"
+        case .retimeAudioClip(let id, _, _, _, _, _, _): return "audiotime:\(id)"
         case .setOverlayFrame(let id, _, _): return "overlayframe:\(id)"
         default: return nil
         }
@@ -131,6 +153,12 @@ public enum EditCommand: Codable, Sendable, Hashable {
             return .setTextContent(id: id, text: t, wasText: wt)
         case (.setAudioVolume(let id, _, let wv), .setAudioVolume(_, let v, _)):
             return .setAudioVolume(id: id, volume: v, wasVolume: wv)
+        case (.setAudioFades(let id, _, _, let wi, let wo), .setAudioFades(_, let i, let o, _, _)):
+            return .setAudioFades(id: id, fadeIn: i, fadeOut: o, wasFadeIn: wi, wasFadeOut: wo)
+        case (.retimeAudioClip(let id, _, _, _, let ws, let wd, let wss),
+              .retimeAudioClip(_, let s, let d, let ss, _, _, _)):
+            return .retimeAudioClip(id: id, start: s, duration: d, sourceStart: ss,
+                                    wasStart: ws, wasDuration: wd, wasSourceStart: wss)
         case (.setOverlayFrame(let id, _, let wf), .setOverlayFrame(_, let f, _)):
             return .setOverlayFrame(id: id, frame: f, wasFrame: wf)
         default:
@@ -142,22 +170,45 @@ public enum EditCommand: Codable, Sendable, Hashable {
 /// The subset of `TextLayer` the style sheet edits, bundled so one gesture is one command.
 public struct TextLayerStyle: Codable, Sendable, Hashable {
     public var fontCategory: FontCategory
+    public var fontName: String?
+    public var weight: TextWeight
+    public var isItalic: Bool
+    public var allCaps: Bool
     public var sizeRatio: Double
+    public var letterSpacing: Double
+    public var lineSpacing: Double
     public var colorHex: String
+    public var opacity: Double
     public var hasShadow: Bool
+    public var outline: TextOutline?
+    public var background: TextBackground?
+    public var rotation: Double
     public var alignment: TextAlignment
     public var entry: TextEntryAnimation
     public var exit: TextExitAnimation
 
     public init(
-        fontCategory: FontCategory, sizeRatio: Double, colorHex: String,
-        hasShadow: Bool, alignment: TextAlignment,
-        entry: TextEntryAnimation, exit: TextExitAnimation
+        fontCategory: FontCategory, fontName: String? = nil, weight: TextWeight = .bold,
+        isItalic: Bool = false, allCaps: Bool = false,
+        sizeRatio: Double, letterSpacing: Double = 0, lineSpacing: Double = 1.18,
+        colorHex: String, opacity: Double = 1, hasShadow: Bool,
+        outline: TextOutline? = nil, background: TextBackground? = nil, rotation: Double = 0,
+        alignment: TextAlignment, entry: TextEntryAnimation, exit: TextExitAnimation
     ) {
         self.fontCategory = fontCategory
+        self.fontName = fontName
+        self.weight = weight
+        self.isItalic = isItalic
+        self.allCaps = allCaps
         self.sizeRatio = sizeRatio
+        self.letterSpacing = letterSpacing
+        self.lineSpacing = lineSpacing
         self.colorHex = colorHex
+        self.opacity = opacity
         self.hasShadow = hasShadow
+        self.outline = outline
+        self.background = background
+        self.rotation = rotation
         self.alignment = alignment
         self.entry = entry
         self.exit = exit
@@ -165,17 +216,58 @@ public struct TextLayerStyle: Codable, Sendable, Hashable {
 
     public init(layer: TextLayer) {
         self.init(
-            fontCategory: layer.fontCategory, sizeRatio: layer.sizeRatio,
-            colorHex: layer.colorHex, hasShadow: layer.hasShadow,
-            alignment: layer.alignment, entry: layer.entry, exit: layer.exit
+            fontCategory: layer.fontCategory, fontName: layer.fontName, weight: layer.weight,
+            isItalic: layer.isItalic, allCaps: layer.allCaps,
+            sizeRatio: layer.sizeRatio, letterSpacing: layer.letterSpacing,
+            lineSpacing: layer.lineSpacing, colorHex: layer.colorHex, opacity: layer.opacity,
+            hasShadow: layer.hasShadow, outline: layer.outline, background: layer.background,
+            rotation: layer.rotation, alignment: layer.alignment,
+            entry: layer.entry, exit: layer.exit
         )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case fontCategory, fontName, weight, isItalic, allCaps, sizeRatio, letterSpacing
+        case lineSpacing, colorHex, opacity, hasShadow, outline, background, rotation
+        case alignment, entry, exit
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        fontCategory = try c.decode(FontCategory.self, forKey: .fontCategory)
+        fontName = try c.decodeIfPresent(String.self, forKey: .fontName)
+        weight = try c.decodeIfPresent(TextWeight.self, forKey: .weight) ?? .bold
+        isItalic = try c.decodeIfPresent(Bool.self, forKey: .isItalic) ?? false
+        allCaps = try c.decodeIfPresent(Bool.self, forKey: .allCaps) ?? false
+        sizeRatio = try c.decode(Double.self, forKey: .sizeRatio)
+        letterSpacing = try c.decodeIfPresent(Double.self, forKey: .letterSpacing) ?? 0
+        lineSpacing = try c.decodeIfPresent(Double.self, forKey: .lineSpacing) ?? 1.18
+        colorHex = try c.decode(String.self, forKey: .colorHex)
+        opacity = try c.decodeIfPresent(Double.self, forKey: .opacity) ?? 1
+        hasShadow = try c.decode(Bool.self, forKey: .hasShadow)
+        outline = try c.decodeIfPresent(TextOutline.self, forKey: .outline)
+        background = try c.decodeIfPresent(TextBackground.self, forKey: .background)
+        rotation = try c.decodeIfPresent(Double.self, forKey: .rotation) ?? 0
+        alignment = try c.decode(TextAlignment.self, forKey: .alignment)
+        entry = try c.decode(TextEntryAnimation.self, forKey: .entry)
+        exit = try c.decode(TextExitAnimation.self, forKey: .exit)
     }
 
     public func applied(to layer: inout TextLayer) {
         layer.fontCategory = fontCategory
+        layer.fontName = fontName
+        layer.weight = weight
+        layer.isItalic = isItalic
+        layer.allCaps = allCaps
         layer.sizeRatio = sizeRatio
+        layer.letterSpacing = letterSpacing
+        layer.lineSpacing = lineSpacing
         layer.colorHex = colorHex
+        layer.opacity = opacity
         layer.hasShadow = hasShadow
+        layer.outline = outline
+        layer.background = background
+        layer.rotation = rotation
         layer.alignment = alignment
         layer.entry = entry
         layer.exit = exit
@@ -204,11 +296,12 @@ extension EditCommand {
             t.clips[i].duration = reverting ? wasDuration : duration
             t.clips[i].sourceStart = reverting ? wasSourceStart : sourceStart
 
-        case .splitClip(let id, let localTime, let newClipID, let wasDuration):
+        case .splitClip(let id, let localTime, let newClipID, let wasDuration, let wasCropEnd):
             let i = try clipIndex(id, in: t)
             if reverting {
                 t.clips.removeAll { $0.id == newClipID }
                 t.clips[i].duration = wasDuration
+                t.clips[i].cropEnd = wasCropEnd
             } else {
                 var tail = t.clips[i]
                 tail.id = newClipID
@@ -272,6 +365,10 @@ extension EditCommand {
             let i = try clipIndex(id, in: t)
             t.clips[i].volume = reverting ? wasVolume : volume
 
+        case .setClipFit(let id, let fitMode, let wasFitMode):
+            let i = try clipIndex(id, in: t)
+            t.clips[i].fitMode = reverting ? wasFitMode : fitMode
+
         case .setTransition(let clipID, let transition, let wasTransition):
             let i = try clipIndex(clipID, in: t)
             t.clips[i].transitionIn = reverting ? wasTransition : transition
@@ -313,6 +410,10 @@ extension EditCommand {
             let i = try textIndex(id, in: t)
             (reverting ? wasStyle : style).applied(to: &t.textLayers[i])
 
+        case .setTextWordTimings(let id, let timings, let wasTimings):
+            let i = try textIndex(id, in: t)
+            t.textLayers[i].wordTimings = reverting ? wasTimings : timings
+
         case .addAudioClip(let clip):
             if reverting {
                 t.audio.removeAll { $0.id == clip.id }
@@ -331,10 +432,27 @@ extension EditCommand {
             }
 
         case .setAudioVolume(let id, let volume, let wasVolume):
-            guard let i = t.audio.firstIndex(where: { $0.id == id }) else {
-                throw ReframeError.documentCorrupt(detail: "audio clip \(id) not found")
-            }
+            let i = try audioIndex(id, in: t)
             t.audio[i].volume = reverting ? wasVolume : volume
+
+        case .setAudioFades(let id, let fadeIn, let fadeOut, let wasFadeIn, let wasFadeOut):
+            let i = try audioIndex(id, in: t)
+            t.audio[i].fadeIn = reverting ? wasFadeIn : fadeIn
+            t.audio[i].fadeOut = reverting ? wasFadeOut : fadeOut
+
+        case .setAudioMuted(let id, let isMuted, let wasMuted):
+            let i = try audioIndex(id, in: t)
+            t.audio[i].isMuted = reverting ? wasMuted : isMuted
+
+        case .retimeAudioClip(let id, let start, let duration, let sourceStart,
+                              let wasStart, let wasDuration, let wasSourceStart):
+            let i = try audioIndex(id, in: t)
+            t.audio[i].start = max(0, reverting ? wasStart : start)
+            t.audio[i].duration = max(0.05, reverting ? wasDuration : duration)
+            t.audio[i].sourceStart = max(0, reverting ? wasSourceStart : sourceStart)
+
+        case .setDucking(let enabled, let wasEnabled):
+            t.duckMusicUnderVoice = reverting ? wasEnabled : enabled
 
         case .addOverlay(let layer):
             if reverting {
@@ -361,7 +479,17 @@ extension EditCommand {
 
         case .setCanvas(let canvas, let wasCanvas):
             t.canvas = reverting ? wasCanvas : canvas
+
+        case .setBackground(let hex, let wasHex):
+            t.backgroundHex = reverting ? wasHex : hex
         }
+    }
+
+    private func audioIndex(_ id: UUID, in t: Timeline) throws -> Int {
+        guard let i = t.audio.firstIndex(where: { $0.id == id }) else {
+            throw ReframeError.documentCorrupt(detail: "audio clip \(id) not found")
+        }
+        return i
     }
 
     private func clipIndex(_ id: UUID, in t: Timeline) throws -> Int {
