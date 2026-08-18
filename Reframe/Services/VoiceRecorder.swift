@@ -39,7 +39,7 @@ final class VoiceRecorder: NSObject, AVAudioRecorderDelegate {
         do {
             // `.playAndRecord` so the preview can keep playing under the voice being recorded;
             // `.defaultToSpeaker` because otherwise iOS routes playback to the earpiece.
-            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetooth])
+            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker])
             try session.setActive(true)
         } catch {
             throw ReframeError.recordingFailed(detail: error.localizedDescription)

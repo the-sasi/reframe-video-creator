@@ -60,8 +60,8 @@ struct ExportView: View {
         }
         .fileExporter(
             isPresented: $isSavingToFiles,
-            item: outputURL.map { ExportedMovie(url: $0) },
-            contentTypes: [.mpeg4Movie],
+            document: outputURL.map { ExportedMovie(url: $0) },
+            contentType: .mpeg4Movie,
             defaultFilename: outputURL?.deletingPathExtension().lastPathComponent
         ) { result in
             if case .success = result { Haptics.success() }

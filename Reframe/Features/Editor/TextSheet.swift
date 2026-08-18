@@ -189,9 +189,9 @@ struct TextSheet: View {
             }
 
             LabeledSlider(title: "Size", value: layer.sizeRatio, range: 0.02...0.14, format: { "\(Int($0 * 1000))" },
-                          onEditingChanged: gesture("style:\(layer.id)"), onChange: setStyle(layer) { $0.sizeRatio = $1 })
+                          onEditingChanged: gesture("style:\(layer.id)"), onChange: styleSetter(layer) { $0.sizeRatio = $1 })
             LabeledSlider(title: "Opacity", value: layer.opacity, range: 0.1...1, format: { "\(Int($0 * 100))%" },
-                          onEditingChanged: gesture("style:\(layer.id)"), onChange: setStyle(layer) { $0.opacity = $1 })
+                          onEditingChanged: gesture("style:\(layer.id)"), onChange: styleSetter(layer) { $0.opacity = $1 })
 
             HStack(spacing: Theme.Space.s) {
                 Chip(title: "Shadow", systemImage: "shadow", isSelected: layer.hasShadow) {
@@ -216,7 +216,7 @@ struct TextSheet: View {
                     }
                 }
                 LabeledSlider(title: "Outline width", value: outline.widthEm, range: 0.02...0.16, format: { String(format: "%.2f", $0) },
-                              onEditingChanged: gesture("style:\(layer.id)"), onChange: setStyle(layer) { $0.outline?.widthEm = $1 })
+                              onEditingChanged: gesture("style:\(layer.id)"), onChange: styleSetter(layer) { $0.outline?.widthEm = $1 })
             }
             if let background = layer.background {
                 VStack(alignment: .leading, spacing: 4) {
@@ -226,13 +226,13 @@ struct TextSheet: View {
                     }
                 }
                 LabeledSlider(title: "Background opacity", value: background.opacity, range: 0.1...1, format: { "\(Int($0 * 100))%" },
-                              onEditingChanged: gesture("style:\(layer.id)"), onChange: setStyle(layer) { $0.background?.opacity = $1 })
+                              onEditingChanged: gesture("style:\(layer.id)"), onChange: styleSetter(layer) { $0.background?.opacity = $1 })
                 LabeledSlider(title: "Corner radius", value: background.cornerRadiusEm, range: 0...0.8, format: { String(format: "%.2f", $0) },
-                              onEditingChanged: gesture("style:\(layer.id)"), onChange: setStyle(layer) { $0.background?.cornerRadiusEm = $1 })
+                              onEditingChanged: gesture("style:\(layer.id)"), onChange: styleSetter(layer) { $0.background?.cornerRadiusEm = $1 })
             }
 
             LabeledSlider(title: "Rotation", value: layer.rotation * 180 / .pi, range: -45...45, step: 1, format: { "\(Int($0))°" },
-                          onEditingChanged: gesture("style:\(layer.id)"), onChange: setStyle(layer) { $0.rotation = $1 * .pi / 180 })
+                          onEditingChanged: gesture("style:\(layer.id)"), onChange: styleSetter(layer) { $0.rotation = $1 * .pi / 180 })
         }
     }
 
@@ -285,9 +285,9 @@ struct TextSheet: View {
             }
 
             LabeledSlider(title: "Letter spacing", value: layer.letterSpacing, range: -0.05...0.3, format: { String(format: "%.2f", $0) },
-                          onEditingChanged: gesture("style:\(layer.id)"), onChange: setStyle(layer) { $0.letterSpacing = $1 })
+                          onEditingChanged: gesture("style:\(layer.id)"), onChange: styleSetter(layer) { $0.letterSpacing = $1 })
             LabeledSlider(title: "Line spacing", value: layer.lineSpacing, range: 0.85...1.8, format: { String(format: "%.2f", $0) },
-                          onEditingChanged: gesture("style:\(layer.id)"), onChange: setStyle(layer) { $0.lineSpacing = $1 })
+                          onEditingChanged: gesture("style:\(layer.id)"), onChange: styleSetter(layer) { $0.lineSpacing = $1 })
         }
     }
 
@@ -393,7 +393,8 @@ struct TextSheet: View {
         document.perform(.setTextStyle(id: layer.id, style: style, wasStyle: was))
     }
 
-    private func setStyle(_ layer: TextLayer, _ mutate: (inout TextLayerStyle, Double) -> Void) -> (Double) -> Void {
+    /// A slider's `onChange`: applies `mutate` with the slider value as one style command.
+    private func styleSetter(_ layer: TextLayer, _ mutate: @escaping (inout TextLayerStyle, Double) -> Void) -> (Double) -> Void {
         { value in setStyle(layer) { mutate(&$0, value) } }
     }
 

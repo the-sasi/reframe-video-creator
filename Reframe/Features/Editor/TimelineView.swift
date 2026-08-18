@@ -328,7 +328,7 @@ final class TimelineScrollView: UIView, UIScrollViewDelegate, UIGestureRecognize
             }
         }
         if gestureRecognizer === reorderPress {
-            if case .clip = hit(at: point) { return timeline.clips.count > 1 }
+            if case .clip? = hit(at: point) { return timeline.clips.count > 1 }
             return false
         }
         return true

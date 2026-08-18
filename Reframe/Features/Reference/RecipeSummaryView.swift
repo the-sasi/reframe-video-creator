@@ -28,8 +28,7 @@ struct RecipeSummaryView: View {
     }
 
     private func content(_ recipe: EditRecipe) -> some View {
-        @Bindable var model = model
-        return ScrollView {
+        ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.l) {
                 understood(recipe)
                 modeSection
@@ -118,8 +117,7 @@ struct RecipeSummaryView: View {
     // MARK: - Mode
 
     private var modeSection: some View {
-        @Bindable var model = model
-        return VStack(alignment: .leading, spacing: Theme.Space.s) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             SectionHeader("How closely to follow it", subtitle: "You can change anything afterwards in the editor.")
             ForEach(BindingFidelity.allCases) { mode in
                 ChoiceCard(
@@ -147,7 +145,6 @@ struct RecipeSummaryView: View {
     // MARK: - Audio
 
     private func audioSection(_ recipe: EditRecipe) -> some View {
-        @Bindable var model = model
         let extracted = model.content.referenceAudioAssetID.flatMap { model.assets[$0] }
         return VStack(alignment: .leading, spacing: Theme.Space.s) {
             SectionHeader("Reference audio", subtitle: recipe.audio.hasSpeech.value

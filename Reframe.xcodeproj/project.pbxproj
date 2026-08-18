@@ -14,9 +14,22 @@
 		9B10000000000000000003 /* Reframe.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Reframe.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		9B1000000000000000000C /* Exceptions for "Reframe" folder in "Reframe" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 9B10000000000000000008 /* Reframe */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		9B10000000000000000004 /* Reframe */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				9B1000000000000000000C /* Exceptions for "Reframe" folder in "Reframe" target */,
+			);
 			path = Reframe;
 			sourceTree = "<group>";
 		};

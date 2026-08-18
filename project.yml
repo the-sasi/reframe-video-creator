@@ -35,6 +35,8 @@ targets:
     # validates it at build time rather than us finding a typo as a black frame at runtime.
     sources:
       - path: Reframe
+        excludes:
+          - Info.plist
     dependencies:
       - package: ReframeKit
         product: ReframeKit
