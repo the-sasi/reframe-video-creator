@@ -241,7 +241,7 @@ public actor PreviewFrameProvider: FrameProvider {
         var ids = Set<UUID>()
         func collect(_ layers: [RenderPlan.PlanLayer]) {
             for layer in layers {
-                if case .asset(let id, _, _) = layer.content { ids.insert(id) }
+                if case .asset(let id, _) = layer.content { ids.insert(id) }
             }
         }
         switch plan.stage {
@@ -315,7 +315,7 @@ public actor ExportFrameProvider: FrameProvider {
         var textures: [UUID: MTLTexture] = [:]
 
         for layer in Self.layers(in: plan) {
-            guard case .asset(let id, let sourceTime, _) = layer.content else { continue }
+            guard case .asset(let id, let sourceTime) = layer.content else { continue }
             guard let reference = registry[id] else { continue }
 
             if reference.kind == .video {

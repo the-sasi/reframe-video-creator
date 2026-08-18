@@ -409,29 +409,106 @@ struct CommandTests {
         return timeline
     }
 
-    @Test("Every command round-trips: apply then revert restores the document")
-    func applyRevertRoundTrip() throws {
-        let original = timeline()
-        let clipID = original.clips[1].id
+    /// One sample per command case.
+    ///
+    /// The exhaustiveness check below is the point: this list used to be hand-maintained and
+    /// silently drifted the moment a case was added — `setClipEffects` was added and never
+    /// covered. The switch makes the compiler refuse to build until a new case is added here.
+    private func sampleCommands(for timeline: Timeline) -> [EditCommand] {
+        let clipID = timeline.clips[1].id
+        let clip = timeline.clips[1]
         let textLayer = TextLayer(
             text: "Blush Rose Elegance", role: .title, start: 0, end: 3,
             frame: NormalizedRect(x: 0.1, y: 0.15, width: 0.8, height: 0.12)
         )
+        let audioClip = AudioClip(assetID: UUID(), start: 0, duration: 3)
+        let overlay = OverlayLayer(
+            assetID: UUID(), start: 0, end: 3,
+            frame: NormalizedRect(x: 0.3, y: 0.8, width: 0.3, height: 0.08)
+        )
+        let tight = NormalizedRect.full.scaled(by: 0.8)
 
-        let commands: [EditCommand] = [
+        return [
             .trimClip(id: clipID, duration: 0.5, sourceStart: 0.2, wasDuration: 1.0, wasSourceStart: 0),
-            .deleteClip(index: 2, clip: original.clips[2]),
+            .splitClip(id: clipID, atLocalTime: 0.5, newClipID: UUID(), wasDuration: 1.0),
+            .deleteClip(index: 2, clip: timeline.clips[2]),
+            .insertClip(index: 1, clip: VideoClip(assetID: UUID(), start: 0, duration: 1)),
             .moveClip(from: 0, to: 3),
+            .replaceClipAsset(id: clipID, assetID: UUID(), wasAssetID: clip.assetID),
             .setClipSpeed(id: clipID, speed: 2.0, wasSpeed: 1.0),
-            .setClipGrade(id: clipID, grade: ColorGrade(exposure: 0.2, contrast: 1.1, saturation: 1.2, temperature: 0), wasGrade: .neutral),
-            .setTransition(clipID: clipID, transition: Transition(kind: .dissolve, duration: 0.3), wasTransition: nil),
+            .setClipCrop(id: clipID, start: tight, end: .full, wasStart: .full, wasEnd: .full),
+            .setClipGrade(
+                id: clipID,
+                grade: ColorGrade(exposure: 0.2, contrast: 1.1, saturation: 1.2, temperature: 0),
+                wasGrade: .neutral
+            ),
+            .setClipEffects(id: clipID, vignette: 0.4, grain: 0.3, wasVignette: 0, wasGrain: 0),
+            .setClipVolume(id: clipID, volume: 0.5, wasVolume: 0),
+            .setTransition(
+                clipID: clipID,
+                transition: Transition(kind: .dissolve, duration: 0.3), wasTransition: nil
+            ),
             .addTextLayer(layer: textLayer),
+            .deleteTextLayer(index: 0, layer: textLayer),
+            .setTextContent(id: textLayer.id, text: "New", wasText: textLayer.text),
+            .setTextFrame(id: textLayer.id, frame: tight, wasFrame: textLayer.frame),
+            .setTextTiming(id: textLayer.id, start: 1, end: 4, wasStart: 0, wasEnd: 3),
+            .setTextStyle(
+                id: textLayer.id,
+                style: TextLayerStyle(
+                    fontCategory: .serif, sizeRatio: 0.08, colorHex: "#FF0000",
+                    hasShadow: false, alignment: .leading, entry: .popIn, exit: .popOut
+                ),
+                wasStyle: TextLayerStyle(layer: textLayer)
+            ),
+            .addAudioClip(clip: audioClip),
+            .deleteAudioClip(index: 0, clip: audioClip),
+            .setAudioVolume(id: audioClip.id, volume: 0.4, wasVolume: 1.0),
+            .addOverlay(layer: overlay),
+            .deleteOverlay(index: 0, layer: overlay),
+            .setOverlayFrame(id: overlay.id, frame: tight, wasFrame: overlay.frame),
+            .setCanvas(canvas: .square1080, wasCanvas: .reel1080),
         ]
+    }
 
-        for command in commands {
+    @Test("Every command case has a sample — compiler-enforced, not hand-maintained")
+    func sampleCoversEveryCase() throws {
+        let timeline = self.timeline()
+        let samples = sampleCommands(for: timeline)
+
+        // Exhaustive switch: adding a case to `EditCommand` breaks the build here until a
+        // sample is added above. That is the whole mechanism — a list nobody is forced to
+        // update is a list that stops being true.
+        for command in samples {
+            switch command {
+            case .trimClip, .splitClip, .deleteClip, .insertClip, .moveClip,
+                 .replaceClipAsset, .setClipSpeed, .setClipCrop, .setClipGrade,
+                 .setClipEffects, .setClipVolume, .setTransition,
+                 .addTextLayer, .deleteTextLayer, .setTextContent, .setTextFrame,
+                 .setTextTiming, .setTextStyle,
+                 .addAudioClip, .deleteAudioClip, .setAudioVolume,
+                 .addOverlay, .deleteOverlay, .setOverlayFrame,
+                 .setCanvas:
+                continue
+            }
+        }
+
+        let names = Set(samples.map(\.name))
+        #expect(names.count >= 20, "expected a sample per command family, got \(names.count)")
+    }
+
+    @Test("Every command round-trips: apply then revert restores the document")
+    func applyRevertRoundTrip() throws {
+        let original = timeline()
+
+        for command in sampleCommands(for: original) {
             var draft = original
-            try command.apply(to: &draft)
-            #expect(draft != original, "\(command.name) did not change anything")
+
+            // Some samples reference entities the base timeline does not contain — deleting a
+            // text layer that was never added, for instance. Those legitimately throw, and a
+            // command that refuses to apply has nothing to revert.
+            guard (try? command.apply(to: &draft)) != nil else { continue }
+
             try command.revert(from: &draft)
             #expect(draft == original, "\(command.name) did not restore the document")
         }

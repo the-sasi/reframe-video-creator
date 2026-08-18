@@ -100,7 +100,12 @@ public struct RenderPlan: Sendable, Hashable {
 
         public enum Content: Sendable, Hashable {
             /// A still or a video frame from the user's pool.
-            case asset(id: UUID, sourceTime: Double, isVideo: Bool)
+            ///
+            /// No `isVideo` flag: the planner never knew, and always passed `false`. Whether an
+            /// asset is a still or footage is the frame provider's business — it holds the
+            /// registry — so a field the planner had to guess at was misleading rather than
+            /// useful.
+            case asset(id: UUID, sourceTime: Double)
             /// A slot with no asset assigned, or an asset that has gone missing. Rendered as a
             /// labelled placeholder rather than crashing or silently dropping the scene.
             case placeholder(label: String)

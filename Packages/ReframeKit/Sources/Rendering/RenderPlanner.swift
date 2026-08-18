@@ -113,8 +113,7 @@ public struct RenderPlanner: Sendable {
             RenderPlan.PlanLayer(
                 content: .asset(
                     id: assetID,
-                    sourceTime: clip.sourceTime(atLocalTime: localTime),
-                    isVideo: false  // resolved by the frame provider, which knows the asset kind
+                    sourceTime: clip.sourceTime(atLocalTime: localTime)
                 ),
                 sourceCrop: clip.crop(atLocalTime: localTime),
                 destination: .full,
@@ -135,7 +134,7 @@ public struct RenderPlanner: Sendable {
         for overlay in timeline.overlays where overlay.isVisible(at: time) {
             layers.append(
                 RenderPlan.PlanLayer(
-                    content: .asset(id: overlay.assetID, sourceTime: 0, isVideo: false),
+                    content: .asset(id: overlay.assetID, sourceTime: 0),
                     sourceCrop: .full,
                     destination: overlay.frame,
                     opacity: overlay.opacity

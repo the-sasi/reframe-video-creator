@@ -307,7 +307,12 @@ final class AppModel {
             if let url = URL(string: UIApplication.openSettingsURLString) {
                 UIApplication.shared.open(url)
             }
-        case .dismiss, .retry, .showScreenRecordingHelp, .waitForCooldown:
+        case .retry:
+            // Was a no-op, so "Try Again" did nothing at all. There is no generic retry —
+            // what to retry depends on where you are — so send the user back one step, which
+            // is the screen the failed action was started from.
+            if path.count > 1 { path.removeLast() }
+        case .dismiss, .showScreenRecordingHelp, .waitForCooldown:
             break
         }
     }

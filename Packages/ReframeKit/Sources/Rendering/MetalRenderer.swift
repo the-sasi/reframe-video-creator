@@ -275,7 +275,7 @@ public final class MetalRenderer: @unchecked Sendable {
 
         for layer in layers {
             switch layer.content {
-            case .asset(let id, _, _):
+            case .asset(let id, _):
                 guard let texture = resources.assetTextures[id] ?? resources.placeholder else {
                     continue
                 }

@@ -32,6 +32,12 @@ struct MappingView: View {
         .background(Theme.Palette.background)
         .navigationTitle("Arrange")
         .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .top) {
+            FlowProgress(step: 3, total: 4, title: "Arrange your content")
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.vertical, Theme.Space.s)
+                .background(.bar)
+        }
         .sheet(item: $swapTarget) { scene in
             SwapSheet(scene: scene)
         }
@@ -40,6 +46,7 @@ struct MappingView: View {
     private func content(_ recipe: EditRecipe) -> some View {
         ScrollView {
             VStack(spacing: Theme.Space.s) {
+                if shortfall > 0 { shortfallBanner(recipe) }
                 header
 
                 ForEach(recipe.scenes) { scene in
@@ -87,6 +94,52 @@ struct MappingView: View {
             .padding(Theme.Space.m)
             .background(.regularMaterial)
         }
+    }
+
+    /// How many slots more than we have distinct assets to fill them with.
+    private var shortfall: Int {
+        guard let recipe = model.recipe else { return 0 }
+        return max(0, recipe.assetSlotCount - model.assets.visuals.count)
+    }
+
+    /// The template is longer than the material given to it.
+    ///
+    /// Reusing photos is a reasonable fallback and the solver already picks the *best* ones to
+    /// repeat — but doing it silently is not. Saying so, with the exact number and a one-tap
+    /// route back to add more, is the honest version.
+    private func shortfallBanner(_ recipe: EditRecipe) -> some View {
+        Button {
+            model.path.removeLast()
+        } label: {
+            HStack(alignment: .top, spacing: Theme.Space.m) {
+                Image(systemName: "photo.badge.plus")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Theme.Palette.warning)
+                    .frame(width: 26)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(shortfall) more would fill every slot")
+                        .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.primaryText)
+                    Text("This style has \(recipe.assetSlotCount) slots and you've added \(model.assets.visuals.count). Reframe is repeating \(shortfall == 1 ? "one" : "some") of them — tap to add more photos or clips.")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(Theme.Palette.secondaryText)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.tertiaryText)
+            }
+            .padding(Theme.Space.m)
+            .background(
+                Theme.Palette.warning.opacity(0.12),
+                in: RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
+            )
+        }
+        .buttonStyle(.plain)
+        .pressable()
     }
 
     private var header: some View {

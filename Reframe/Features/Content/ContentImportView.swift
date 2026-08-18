@@ -45,6 +45,16 @@ struct ContentImportView: View {
         .navigationTitle("Your content")
         .navigationBarTitleDisplayMode(.inline)
         .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .top) {
+            FlowProgress(
+                step: model.recipe == nil ? 1 : 2,
+                total: model.recipe == nil ? 2 : 4,
+                title: "Add photos, videos and words"
+            )
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .background(.bar)
+        }
         .safeAreaInset(edge: .bottom) {
             PrimaryButton(
                 title: model.recipe == nil ? "Create Video" : "Auto Arrange",
