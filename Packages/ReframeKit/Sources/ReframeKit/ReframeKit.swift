@@ -22,3 +22,7 @@ public enum ReframeKit {
 /// links the umbrella product rather than the sub-modules, so it cannot simply qualify with
 /// `RecipeCore.`; exporting the alias from here gives it a name that always resolves.
 public typealias SlotTextAlignment = RecipeCore.TextAlignment
+
+/// Unambiguous spelling of `RecipeCore.Transition`. SwiftUI declares a `Transition` protocol,
+/// so the bare name is ambiguous in type position inside the app target.
+public typealias ClipTransition = RecipeCore.Transition

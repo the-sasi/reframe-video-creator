@@ -17,8 +17,17 @@ with `swift test` on a Mac — no simulator, no device, no fixtures larger than 
 | Render planning | Pure `plan()` assertions: z-order, transition overlap, text timing | `swift test` |
 | Metal rendering | Render a known plan → read back → compare to a golden PNG within tolerance | Device/simulator |
 | Export | Encode 3 s, re-open with `AVAssetReader`, assert duration/fps/dimensions | Device |
-| Commands | Every command: apply → revert → assert timeline equals original | `swift test` |
+| Commands | Every command: apply → revert → assert timeline equals original; exhaustive-switch check that every case has a sample | `swift test` |
+| Binding | Subject-aware crop keeps the subject inside the window; composition transfer lands it where the reference's was; fidelity modes bind what they claim; cumulative beat quantisation preserves length | `swift test` + CoreCheck |
+| Mix planning | Fades, ducking ramps, clip-audio tracks with speed, mute drops the track | CoreCheck |
+| Starter templates | Every starter binds, is deterministic, round-trips JSON | CoreCheck |
 | Zero-cost invariant | Source grep for API-key patterns and forbidden hosts | `swift test` |
+
+**CoreCheck** (`Packages/ReframeKit/Tools/CoreCheck`) is a Foundation-only assertion harness
+over `RecipeCore` that runs with the Windows Swift toolchain in about fifteen seconds
+(`powershell -File Packages/ReframeKit/build-core.ps1 -Check`). It exists because this project
+is developed without a Mac; the real suite is `swift test` in CI, and everything CoreCheck
+covers has a counterpart there or is pure enough that CoreCheck *is* the test.
 
 The synthetic-fixture approach matters: generating a clip with a cut at exactly frame 47 gives an
 *exact* assertion, where a real video only supports "roughly there". Real videos are for manual
@@ -26,7 +35,9 @@ QA, not for the suite.
 
 ### Manual QA matrix (§46)
 
-Run before any change to analysis or rendering is believed:
+Superseded by the twelve-type corpus and scoring rubric in [09-device-testing.md](09-device-testing.md).
+Run that before any change to analysis or rendering is believed. The original matrix, kept for
+the cases it names that the corpus does not:
 
 | Reference | User assets | What it proves |
 |---|---|---|
@@ -45,8 +56,10 @@ Run before any change to analysis or rendering is believed:
 
 ## Performance
 
-**Every number in this table is a target, not a measurement.** Nothing here has been run. The
-instrumentation (`PerformanceLog`, signposts on every stage) is in place to check them.
+**Every number in this table is a target, not a measurement.** Nothing here has been run on a
+device yet. The instrumentation (`PerformanceLog`, signposts on every stage, the `[MB]` column in
+the diagnostics log) is in place to check them; the measurement table to fill in is §4 of
+[09-device-testing.md](09-device-testing.md).
 
 | Metric | Target | Device basis |
 |---|---|---|
@@ -85,8 +98,10 @@ The strong version, which this architecture happens to make easy:
 
 - **`ReframeKit` contains no networking code.** Not disabled — absent. There is no `URLSession`,
   no socket, no third-party SDK. A test asserts this by scanning imports.
-- **The app makes zero network requests in normal operation.** No model downloads (everything is
-  a system framework), no telemetry, no crash reporting, no remote config, no ads.
+- **The app makes zero network requests of its own.** No telemetry, no crash reporting, no
+  remote config, no ads. Two *system* activities can touch the network, both at the user's
+  request: PhotoKit fetching the user's own iCloud-resident photo, and — only if captions are
+  used — the system downloading Apple's on-device speech assets once.
 - **No accounts, no identifiers, no analytics.** Nothing to opt out of, because nothing collects.
 - **Photos access is `.readWrite` but used narrowly**: read the assets you pick, write the file
   you export. Limited Library selection is fully supported.
@@ -115,7 +130,8 @@ sent, and a global off switch that is the default.
 | Save to Photos / Files / Share | ✅ |
 | Project persistence | ✅ |
 | Optional `FoundationModels` copy suggestions | ✅ (on-device) |
-| **Anything requiring a network** | **Does not exist** |
+| Captions (after the one-time system language pack) | ✅ (on-device) |
+| **Anything requiring a network** | **Does not exist** (the two system fetches above are the whole list) |
 
 The app is not "offline-first". It is offline, full stop. There is no degraded mode because
 there is no connected mode. Airplane mode changes nothing about how it behaves, which is the

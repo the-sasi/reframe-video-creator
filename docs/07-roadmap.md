@@ -1,85 +1,93 @@
-# 07 — Phases, MVP scope, and what happens next
+# 07 — Phases, scope, and what happens next
 
 ## Phasing
 
 | Phase | Scope | State |
 |---|---|---|
-| **1 — Editor foundation** | Import, timeline, preview, trim/split, text, basic transitions, export | ✅ Built |
-| **2 — Reference analysis** | Scene detection, timing, motion, OCR, audio | ✅ Built |
-| **3 — Template engine** | `EditRecipe` schema, slots, transitions, beat timing, binder | ✅ Built |
-| **4 — Asset mapping** | Feature extraction, cost matrix, Hungarian, diversity refinement | ✅ Built |
-| **5 — AI-assisted generation** | Optional `FoundationModels` copy & role refinement | ✅ Built (optional path) |
-| **6 — Advanced AI** | Generative B-roll, image animation, background generation | ⬜ **Not built — see below** |
+| **1 — Editor foundation** | Import, timeline, preview, trim/split, text, transitions, export | ✅ Built, rebuilt Aug 2026 (direct-manipulation timeline, contextual tools) |
+| **2 — Reference analysis** | Scene detection, timing, motion, OCR, audio, composition | ✅ Built; motion/dissolve/fade detection corrected Aug 2026 |
+| **3 — Template engine** | `EditRecipe` schema, slots, transitions, beat timing, binder, fidelity modes, subject-aware crop | ✅ Built |
+| **4 — Asset mapping** | Feature extraction (saliency, aesthetics, sharpness, faces, prints), Hungarian, diversity, pins, chronology | ✅ Built |
+| **5 — Audio** | Mix planner, music / voice / reference / clip audio, ducking, voiceover recording, extraction, waveforms | ✅ Built |
+| **6 — Captions & text** | On-device transcription → timed captions; fonts, weights, outline, pill, presets | ✅ Built (captions optional, iOS 26) |
+| **7 — Product** | Templates library, autosave, recovery, thumbnails, rename/duplicate/favourite, export presets, appearance | ✅ Built |
+| **8 — Device validation** | Real references, real photos, measured performance | ⬜ **Owner's step** — see [09](09-device-testing.md) |
+| **9 — Advanced editing** | Keyframes, picture-in-picture, masks, LUTs, speed ramps, reverse/freeze | ⬜ Not built — P2, see below |
+| **10 — Generative** | B-roll, image animation, background generation | ⬜ Not built — see below |
 
-Phases 1–4 were built in dependency order but shipped as one vertical slice, because a video
-editor without export is not testable and a recipe without a binder is not observable.
+### On phase 9
 
-### On Phase 6
+The brief lists keyframes, PiP, masking, LUTs, reverse and freeze-frame. None of these is
+required for the hero flow, all of them are real work, and several would change the render
+plan's shape. They are ordered here by value per unit of risk:
 
-The brief says generative AI must be optional, and asks that the app be useful without it. It is
-worth being blunt about why phase 6 is empty rather than partially stubbed: **there is currently
-no free, offline, on-device image-to-video model that runs acceptably on an iPhone.** Every
-credible option is a paid API — which §3 forbids as a mandatory dependency, and which as an
-*optional* dependency would still mean building a billing-shaped hole into a personal app.
+1. **Keyframes on clip position/scale/opacity and text opacity/scale.** The crop rects already
+   *are* two keyframes with an easing; generalising `cropStart/cropEnd` to `[CropKeyframe]` and
+   adding an opacity track is a contained schema change with a straightforward planner change.
+2. **Freeze frame and reverse.** Both are `sourceTime` mappings in the planner
+   (`sourceTime = constant`, `sourceTime = end - t·speed`) plus a sequential-decoder path that can
+   read backwards. Reverse needs a decode-to-cache pass for long clips.
+3. **Picture-in-picture / stickers.** `OverlayLayer` already renders any image at any rect; PiP
+   is an overlay whose asset is a video, which the frame providers already handle. Needs a UI.
+4. **Masks.** A per-layer mask texture (rect / circle / gradient) is one more sampler in the
+   layer shader. Custom shapes are a rasterisation problem the text pipeline already solved.
+5. **LUTs.** A 3D texture sampler and a licence-checked LUT source. Grade + presets cover most of
+   the practical need; LUTs are last.
 
-`EffectTemplate` has a case reserved and `IntelligenceProvider` has room for a generative
-method. Nothing calls them. That is the honest position, and it will change when the model
-landscape does, not before.
+### On phase 10
 
----
-
-## MVP scope, as delivered
-
-Checked against §48 line by line:
-
-| # | Requirement | Where |
-|---|---|---|
-| 1 | Import reference video | `Features/Reference/ReferenceImportView.swift` |
-| 2 | Analyse scene boundaries | `Analysis/SceneDetector.swift` |
-| 3 | Extract timing | `Analysis/RecipeCompiler.swift` |
-| 4 | Detect basic transitions | `SceneDetector.detectGradualTransitions` |
-| 5 | Import user images | `Features/Content/ContentImportView.swift` |
-| 6 | Map images to slots | `Mapping/AssetMapper.swift` |
-| 7 | Apply zoom/pan | `Rendering/RenderPlanner.swift` (Ken Burns from `CameraMove`) |
-| 8 | Apply transitions | `Rendering/TransitionLibrary.swift` + `Shaders.metal` |
-| 9 | Add user text | `RecipeCore/RecipeBinder.swift` + `TextRasterizer.swift` |
-| 10 | Render 9:16 | `Rendering/VideoExporter.swift` |
-| 11 | Save to Photos | `Features/Export/ExportService.swift` |
-
-And the exclusions, honoured: no generative video, no cloud infrastructure, no social features,
-no accounts, no subscriptions, no analytics. There is a test —
-`ZeroCostArchitectureTests.testNoAPIKeysAnywhere` — that greps the source tree for provider key
-patterns and fails the build if one appears. The constraint is enforced by CI, not by intent.
+The brief says generative AI must be optional, and asks that the app be useful without it.
+There is currently no free, offline, on-device image-to-video model that runs acceptably on an
+iPhone. Every credible option is a paid API — forbidden as a mandatory dependency, and as an
+optional one it would still mean building a billing-shaped hole into a personal app.
+`IntelligenceProvider` has room for it. It stays empty until the model landscape changes.
 
 ---
 
-## First-build checklist
+## Scope, as delivered (Aug 2026)
 
-This tree was written on Windows and **has never been compiled**. Expect the first `⌘B` on macOS
-to surface issues in roughly this order. None of these are design problems; they are the normal
-cost of authoring without a compiler.
+| Area | Where |
+|---|---|
+| Import reference (Photos, Files, Share → Reframe) | `ReferenceImportView`, `AppModel.handleIncomingURL`, `Info.plist` document types |
+| Analyse scenes / motion / composition / text / audio | `Analysis/*` |
+| Fidelity modes | `RecipeBinder.Options.fidelity`, `RecipeSummaryView` |
+| Reference audio: keep / extract / save to Files | `AudioExtractor`, `RecipeSummaryView`, `AudioSheet` |
+| Import photos / clips / music; record voiceover | `ContentImportView`, `MediaImport`, `VoiceRecorder`, `VoiceoverSheet` |
+| Analyse assets, map, pin, shuffle | `AssetFeatureExtractor`, `AssetMapper`, `MappingView` |
+| Subject-aware crop, aspect retargeting | `RecipeBinder.fillWindow`, `CanvasSheet`, `StyleSheet` smart crop |
+| Preview with playing video and mixed audio | `PreviewEngine`, `PreviewFrameProvider`, `AudioMixBuilder` |
+| Timeline: trim, split, reorder, text/audio drag | `TimelineView` |
+| Text: fonts, presets, outline, pill, animation, timing, captions | `TextSheet`, `CaptionsSheet`, `TextRasterizer` |
+| Audio: tracks, levels, fades, ducking, clip sound | `AudioSheet`, `AudioMixPlanner` |
+| Transitions, speed, replace, canvas, look | `EditorSheets`, `StyleSheet` |
+| Export presets, sizes, quality, Photos / Files / share | `ExportView`, `VideoExporter` |
+| Projects: autosave, recovery, thumbnails, rename, duplicate, favourite, search, sort | `AppModel`, `HomeView`, `ProjectStore` |
+| Templates: library, starters, save, import, export | `TemplateLibraryView`, `StarterTemplates` |
+| Diagnostics: text and JSON export | `DiagnosticsLog`, `DiagnosticsView` |
 
-1. **Signing** — set your team on the `Reframe` target. Bundle id is `com.reframe.app`; change it.
-2. **`AVAssetExportSession` deprecations** — `status` is deprecated on iOS 18+ in favour of an
-   API that has been reported as documentation-only. We use `AVAssetWriter` directly and avoid
-   the question, but the `ExportService` capability probe touches `AVAssetExportSession` and may
-   warn.
-3. **Vision Swift-API naming** — iOS 18 added a Swift-only Vision API that drops the `VN` prefix
-   (`RecognizeTextRequest` vs `VNRecognizeTextRequest`) with a different async shape. The code
-   uses the **classic `VN`-prefixed API throughout** because it is stable across more OS versions
-   and its behaviour is better documented. Both exist in iOS 26; no migration is required, but do
-   not mix them in one file.
-4. **`MTLPixelFormat` / `CVPixelBuffer` plumbing** — `CVMetalTextureCache` interop is the most
-   likely source of a first-run black frame. `MetalRenderer` logs pixel-format mismatches
-   explicitly for this reason.
-5. **Metal shader compilation** — `Shaders.metal` must be in the app target's *Compile Sources*,
-   not the package's. The Xcode project places it there; XcodeGen's `project.yml` mirrors that.
-6. **Concurrency** — Swift 6 strict mode will flag anything I got wrong about `Sendable` across
-   the Vision and AVFoundation boundaries. `MetalRenderer` is deliberately
-   `@unchecked Sendable` with a comment explaining the serial-queue confinement.
+Exclusions honoured: no generative video, no cloud infrastructure, no social features, no
+accounts, no subscriptions, no analytics. `ZeroCostArchitectureTests` greps the source tree for
+provider key patterns and fails the build if one appears.
 
-Then, before trusting any number in [08](08-quality.md), run the benchmark suite on a real
-device. The instrumentation exists; the measurements do not.
+---
+
+## First-device checklist
+
+The build has been compiled and unit-tested by CI only. Expect the first device run to find
+things in roughly this order; each is a diagnostics-log line away from a fix:
+
+1. **Timing feel.** Beat quantisation and transition durations were tuned against synthetic
+   references. Real music will say whether 120 ms is the right snap tolerance.
+2. **Preview video sync.** The AVPlayer-per-clip approach infers playback rate from the
+   timeline; a stutter on speed-changed clips would show up here.
+3. **Memory on 4K exports.** The still cache is byte-budgeted at ~120 MB; the number to watch is
+   peak footprint in the log during a 4K export of a 20-photo project.
+4. **Caption language pack.** First use downloads assets via the system; the flow is written
+   against the iOS 26 API as documented and needs one real run.
+5. **Thermal behaviour** during a 60 s 1080p60 export.
+
+Then, before trusting any number in [08](08-quality.md), run the matrix in
+[09](09-device-testing.md) and write the measurements down.
 
 ---
 
@@ -87,19 +95,15 @@ device. The instrumentation exists; the measurements do not.
 
 Ordered by value per unit of risk.
 
-1. **Recipe marketplace, locally.** Recipes are asset-free JSON with no reference pixels, so they
-   are already shareable as files. A share/import affordance is a day of work and turns every
-   analysis into reusable capital.
-2. **Re-target aspect ratio.** Normalised rects mean a 9:16 recipe can bind to 1:1 or 16:9 with
-   only crop re-solving. Saliency already tells us where the subject is.
-3. **Multi-reference blending.** Take pacing from one reference and typography from another.
-   The schema separates them cleanly enough that this is a merge function, not a rewrite.
-4. **Speech-driven cutting.** `SpeechTranscriber` already gives timed segments; cutting on
+1. **Keyframes** — see phase 9 above.
+2. **Multi-reference blending.** Pacing from one reference, typography from another. The schema
+   separates them cleanly enough that this is a merge function.
+3. **Speech-driven cutting.** `CaptionTranscriber` already gives timed segments; cutting on
    sentence boundaries for talking-head references is a small addition to `RecipeCompiler`.
-5. **iPad + Mac Catalyst.** The engine has no UIKit dependency; only the timeline view and
+4. **iPad + Mac Catalyst.** The engine has no UIKit dependency; only the timeline view and
    preview host would need work.
-6. **Optional cloud providers.** `IntelligenceProvider` exists precisely so this can be added
+5. **Optional cloud providers.** `IntelligenceProvider` exists precisely so this can be added
    without touching the core. It should stay unimplemented until there is a reason.
 
 Explicitly **not** on the roadmap: accounts, sync, subscriptions, telemetry, a backend of any
-kind. §32 asked for simple, local, fast, maintainable. Every item above preserves that.
+kind.

@@ -42,31 +42,53 @@ compositing, VideoToolbox for encoding. All of it already installed on the devic
 ## Features
 
 **Reference analysis** — all on-device, all offline
-- Shot-boundary detection (adaptive HSV content differencing)
-- Dissolve and fade classification via a linear-blend residual test
-- Camera-move recovery — push, pull, pan, rotate — by fitting a similarity transform to an optical-flow field
-- Text layer extraction with OCR, position, colour and animation inference
+- Shot-boundary detection (adaptive HSV content differencing), dissolve and fade classification
+  by a linear-blend residual test — with the false positives that camera motion used to cause
+  designed out
+- Camera-move recovery — push, pull, pan, rotate — by fitting a similarity transform to an
+  optical-flow field, classified on the *frame centre's* motion
+- Composition: where the subject sat in every shot, so your subject can be put there too
+- Text layer extraction with OCR, position, colour and animation inference; watermark rejection
 - Deterministic BPM and beat-grid detection (spectral flux → autocorrelation → comb-filter phase)
-- Dominant-colour palette and shot-scale classification
+- Single-shot references (talking heads) are a one-slot style, not an error
+
+**Three ways to use a style** — *Close Match*, *Use Style* (pacing, transitions, motion, rhythm;
+your own text), *Use Structure* (just the cut skeleton)
 
 **Honest inference**
 - Every inferred property carries a confidence *and* a plain-language explanation
 - Anything under 80% is badged **Guessed** — tap it to see the actual reasoning
-- Low confidence degrades to a declared safe fallback instead of guessing loudly
-- Fonts are *categorised*, never identified, because that's what's knowable from a 1080p frame
 
 **Intelligent asset mapping**
-- Vision saliency, aesthetics scoring and built-in screenshot rejection
-- Optimal slot assignment via the Hungarian algorithm — not greedy
-- Adjacency-diversity refinement so near-identical photos don't land back to back
+- Vision saliency, faces, aesthetics, sharpness and feature prints, persisted with the project
+- Optimal slot assignment via the Hungarian algorithm — not greedy — with diversity refinement,
+  chronology as a tie-breaker, and pins that Shuffle respects
+- **Subject-aware crop**: a landscape photo bound into a 9:16 slot is cropped around its subject
+  and placed where the reference's subject was; close-up slots tighten on small subjects
 - Every choice shows its reason and is one tap from being overridden
 
-**Editing & export**
-- Full timeline: trim, split, duplicate, reorder, transitions, text, audio
-- Unlimited undo/redo that survives a force-quit
-- Beat-snapping timeline with haptics
-- 720p / 1080p / 4K, 24/30/60fps, H.264 or HEVC
-- **No watermark. Ever.**
+**Editing** — a real editor, not an escape hatch
+- Timeline with thumbnails, trim handles, long-press reorder, draggable text chips, audio lanes
+  with waveforms; playhead fixed at centre; snapping to beats and cuts with haptics
+- Contextual tools for what's selected: split, replace, transition, framing, speed, adjust,
+  volume, duplicate, delete
+- Text: sixteen bundled faces, weights, italic, tracking, outline, background pill, presets,
+  entrance/exit animation, timing; drag on the preview to place it
+- Audio: music, voiceover recording, the reference's own soundtrack (opt-in), clip sound,
+  levels, fades, mute, ducking under voice
+- Captions from speech, on device, with words appearing as spoken (iOS 26)
+- Canvas 9:16 / 4:5 / 1:1 / 16:9 with crops re-solved around subjects; Fill / Fit / Smart crop
+- Filters, colour, vignette, grain; ten transitions with duration and direction
+- Unlimited undo/redo that survives a force-quit; autosave; crash recovery
+
+**Preview = export**
+- Video clips genuinely play in the preview; audio is the same mix the exporter writes
+- 720p / 1080p / 4K at the canvas's aspect, 24/30/60 fps, HEVC or H.264, three quality tiers
+- Save to Photos, Save to Files, Share. **No watermark. Ever.**
+
+**Templates**
+- Every analysed reference is a saved style; ten built-in starters; categories; preview;
+  rename, duplicate, export/import `.reframestyle`; Share → Reframe
 
 ## The core idea
 
@@ -104,17 +126,15 @@ unrepresentable.
 ## Status
 
 **Everything compiles and all tests pass** on `macos-26` with Xcode 26 — engine, SwiftUI app and
-Metal shaders — and CI publishes an installable unsigned `.ipa` on every push.
-
-```
-✓ Engine tests      31 tests, 11 suites, 0 failures
-✓ App build (iOS)   unsigned, no certificate required
-✓ Unsigned .ipa     artifact, ready to sideload
-```
+Metal shaders — and CI publishes an installable unsigned `.ipa` on every push. The engine's
+pure core also builds and self-checks on Windows in ~15 s (`Packages/ReframeKit/build-core.ps1 -Check`).
 
 What has **not** happened: nobody has run it on a device. Every performance target in
 [`docs/08-quality.md`](docs/08-quality.md) is still unmeasured, and no reference video has been
-through the pipeline end to end. Compiling is not working.
+through the pipeline end to end on a phone. Compiling is not working. The procedure, the
+twelve-reference corpus and the scoring rubric are in
+[`docs/09-device-testing.md`](docs/09-device-testing.md) — that is the next step, and it is the
+owner's.
 
 ### Bugs CI caught that review had not
 
@@ -181,15 +201,18 @@ swift build --package-path Packages/ReframeKit --target RecipeCore
 
 ## Using it
 
-1. **Create From Reference** → pick a video from Photos or Files
+1. **Create From Reference** → pick a video from Photos or Files (or Share → Reframe from
+   anywhere)
 2. Watch the analysis land — scene count, pacing, camera moves, text slots, BPM. Anything
    uncertain is labelled *Guessed*, not hidden
-3. **Use This Style** → add 5–20 photos, a product name, a CTA
-4. **Auto Arrange** assigns photos to slots; every assignment shows its reason and is swappable
-5. **Generate**, then edit if you want — full timeline, unlimited undo
-6. **Export** to Photos
+3. Choose **Close Match**, **Use Style** or **Use Structure**; keep or replace the reference's
+   audio
+4. Add 5–20 photos and clips, your words, music and/or a voiceover
+5. **Auto Arrange** assigns photos to slots; every assignment shows its reason; pin what you like
+6. **Create Video** → the editor, with the video playing. Refine anything, or don't
+7. **Export** to Photos, Files or the share sheet
 
-Five taps from opening the app to a rendered reel. The editor is an escape hatch, not a step.
+Six taps from opening the app to a rendered reel.
 
 ## Project layout
 
@@ -200,15 +223,17 @@ reframe/
 ├── Reframe.xcodeproj/           Xcode 26 project (synchronized folders)
 ├── project.yml                  XcodeGen fallback
 ├── Reframe/                     App target — SwiftUI, no engine logic
-│   ├── App/  DesignSystem/  Features/  Rendering/  Resources/
+│   ├── App/  DesignSystem/  Features/  Services/  Rendering/  Resources/  Info.plist
 └── Packages/ReframeKit/         Engine — pure Swift, no UI framework
+    ├── build-core.ps1           Windows: build RecipeCore / run CoreCheck
+    ├── Tools/CoreCheck/         Foundation-only assertion harness
     └── Sources/
-        ├── RecipeCore/          Schema, timeline, commands, binding
-        ├── MediaIO/             Frame streaming, audio, project store
+        ├── RecipeCore/          Schema, timeline, commands, binder, mix planner, starters
+        ├── MediaIO/             Frame streaming, audio decode/extract/waveform, project store
         ├── Analysis/            Reference → recipe
         ├── Mapping/             Feature extraction + optimal assignment
-        ├── Rendering/           Metal graph, exporter, preview
-        └── Intelligence/        Optional provider (heuristic by default)
+        ├── Rendering/           Metal graph, frame providers, audio mix, exporter, preview
+        └── Intelligence/        Optional: on-device copy suggestions, caption transcription
 ```
 
 The module split is compiler-enforced, not conventional: `Analysis` has no way to reach
@@ -244,7 +269,9 @@ that's enforced structurally, not by a warning label:
   size your own copy. `RecipeBinder` has no code path that reads it — there's a test
 - **Watermarks and handles are actively discarded.** `@names`, follow/subscribe phrases and
   persistent corner text never become slots
-- **Reference audio is analysed, never extracted.** What survives is a BPM and a few hundred floats
+- **Reference audio is analysed, not extracted — unless you tap the button.** Analysis keeps a
+  BPM and a few hundred floats. *Keep the reference's audio* is an explicit, per-project choice
+  that says you need the rights to it
 
 What comes out of analysis is a *structure* — timings, transforms, confidences. Much closer to
 "12 scenes at 140 BPM averaging 1.2s" than to a copy of anything.

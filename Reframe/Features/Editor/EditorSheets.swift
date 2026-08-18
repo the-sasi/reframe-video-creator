@@ -62,7 +62,7 @@ struct TransitionSheet: View {
                     LabeledSlider(title: "Duration", value: current.duration, range: 0.1...1.2, step: 0.05,
                                   format: { String(format: "%.2fs", $0) },
                                   onEditingChanged: nil) { value in
-                        document.perform(.setTransition(clipID: clip.id, transition: Transition(kind: current.kind, duration: value, direction: current.direction), wasTransition: clip.transitionIn))
+                        document.perform(.setTransition(clipID: clip.id, transition: ClipTransition(kind: current.kind, duration: value, direction: current.direction), wasTransition: clip.transitionIn))
                     }
                     if current.kind.needsDirection {
                         VStack(alignment: .leading, spacing: 6) {
@@ -70,7 +70,7 @@ struct TransitionSheet: View {
                             HStack(spacing: Theme.Space.s) {
                                 ForEach(TransitionDirection.allCases, id: \.self) { direction in
                                     Chip(title: direction.rawValue.capitalized, systemImage: arrow(for: direction), isSelected: (current.direction ?? .left) == direction) {
-                                        document.perform(.setTransition(clipID: clip.id, transition: Transition(kind: current.kind, duration: current.duration, direction: direction), wasTransition: clip.transitionIn))
+                                        document.perform(.setTransition(clipID: clip.id, transition: ClipTransition(kind: current.kind, duration: current.duration, direction: direction), wasTransition: clip.transitionIn))
                                     }
                                 }
                             }
@@ -92,7 +92,7 @@ struct TransitionSheet: View {
     }
 
     private func set(kind: TransitionKind, for clip: VideoClip) {
-        let transition: Transition? = kind == .cut ? nil : Transition(
+        let transition: ClipTransition? = kind == .cut ? nil : ClipTransition(
             kind: kind,
             duration: clip.transitionIn?.kind == kind ? (clip.transitionIn?.duration ?? TransitionLibrary.defaultDuration(for: kind)) : TransitionLibrary.defaultDuration(for: kind),
             direction: kind.needsDirection ? (clip.transitionIn?.direction ?? .left) : nil

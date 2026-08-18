@@ -416,7 +416,7 @@ struct EditorView: View {
                 duration: isVideo && reference.duration > 0 ? min(reference.duration, 4) : 2,
                 cropStart: .full,
                 cropEnd: isVideo ? .full : NormalizedRect.full.scaled(by: 0.9),
-                transitionIn: index == 0 ? nil : Transition(kind: .cut, duration: 0),
+                transitionIn: index == 0 ? nil : ClipTransition(kind: .cut, duration: 0),
                 volume: 0
             )
             document.perform(.insertClip(index: index, clip: clip))

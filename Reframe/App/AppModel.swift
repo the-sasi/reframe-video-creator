@@ -161,7 +161,7 @@ final class AppModel {
                 cropStart: pushesIn ? .full : tight,
                 cropEnd: pushesIn ? tight : .full,
                 easing: .easeInOut,
-                transitionIn: index == 0 ? nil : Transition(kind: .cut, duration: 0),
+                transitionIn: index == 0 ? nil : ClipTransition(kind: .cut, duration: 0),
                 volume: isVideo ? content.clipAudioVolume : 0
             )
         }
