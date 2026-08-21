@@ -88,7 +88,10 @@ struct VoiceoverSheet: View {
                 Task {
                     do { try await recorder.start(); errorText = nil }
                     catch let error as ReframeError { errorText = error.presentation.message; if case .microphoneDenied = error { model.present(error) } }
-                    catch { errorText = "\(error)" }
+                    catch {
+                        DiagnosticsLog.shared.warning("voiceover", "unexpected error: \(error)")
+                        errorText = "Recording failed: \(error.localizedDescription)"
+                    }
                 }
             }
         case .recording:

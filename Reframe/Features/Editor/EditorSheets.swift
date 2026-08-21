@@ -490,7 +490,8 @@ struct CaptionsSheet: View {
         } catch let error as ReframeError {
             errorText = error.presentation.message
         } catch {
-            errorText = "\(error.localizedDescription)"
+            DiagnosticsLog.shared.warning("captions", "unexpected error: \(error)")
+            errorText = "Captions failed: \(error.localizedDescription)"
         }
     }
 }

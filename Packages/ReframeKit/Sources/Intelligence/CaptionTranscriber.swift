@@ -83,6 +83,75 @@ public enum CaptionTranscriber {
         throw ReframeError.transcriptionUnavailable(reason: "On-device transcription needs iOS 26.")
     }
 
+    #if canImport(Speech)
+    /// One analysis run over a PCM file.
+    @available(iOS 26.0, macOS 26.0, *)
+    private static func runAnalysis(fileURL: URL, locale: Locale) async throws -> [TranscribedSegment] {
+        let transcriber = SpeechTranscriber(
+            locale: locale,
+            transcriptionOptions: [],
+            reportingOptions: [],
+            attributeOptions: [.audioTimeRange]
+        )
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        let file = try AVAudioFile(forReading: fileURL)
+
+        // Collect results concurrently with the analysis, then finish through the end of
+        // the file so the last words are finalised.
+        let collector = Task<[TranscribedSegment], Error> {
+            var segments: [TranscribedSegment] = []
+            for try await result in transcriber.results where result.isFinal {
+                if let segment = Self.segment(from: result.text) {
+                    segments.append(segment)
+                }
+            }
+            return segments
+        }
+
+        do {
+            if let last = try await analyzer.analyzeSequence(from: file) {
+                try await analyzer.finalizeAndFinish(through: last)
+            } else {
+                await analyzer.cancelAndFinishNow()
+            }
+        } catch {
+            collector.cancel()
+            throw ReframeError.transcriptionUnavailable(reason: "Transcription stopped: \(error.localizedDescription)")
+        }
+
+        return try await collector.value
+    }
+
+    /// Decodes any readable audio file to a linear-PCM CAF in a temporary location.
+    /// `AVAudioFile` does the codec work: its `processingFormat` is always PCM.
+    private static func pcmCopy(of url: URL) throws -> URL {
+        let source: AVAudioFile
+        do {
+            source = try AVAudioFile(forReading: url)
+        } catch {
+            throw ReframeError.transcriptionUnavailable(reason: "The audio couldn't be read.")
+        }
+        let format = source.processingFormat
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("captions-pcm-\(UUID().uuidString).caf")
+        let output = try AVAudioFile(
+            forWriting: destination,
+            settings: format.settings,
+            commonFormat: format.commonFormat,
+            interleaved: format.isInterleaved
+        )
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 65536) else {
+            throw ReframeError.transcriptionUnavailable(reason: "The audio couldn't be decoded.")
+        }
+        while true {
+            try source.read(into: buffer)
+            if buffer.frameLength == 0 { break }
+            try output.write(from: buffer)
+        }
+        return destination
+    }
+    #endif
+
     /// Transcribes an audio file. Returns sentence-ish segments with word timings.
     public static func transcribe(fileURL: URL, locale: Locale = .current) async throws -> [TranscribedSegment] {
         #if canImport(Speech)
@@ -92,49 +161,40 @@ public enum CaptionTranscriber {
                 throw ReframeError.transcriptionUnavailable(reason: availability.reason ?? "Unsupported language.")
             }
             if !availability.isInstalled {
-                try await installAssetsIfNeeded(locale: locale)
-            }
-
-            let transcriber = SpeechTranscriber(
-                locale: locale,
-                transcriptionOptions: [],
-                reportingOptions: [],
-                attributeOptions: [.audioTimeRange]
-            )
-            let analyzer = SpeechAnalyzer(modules: [transcriber])
-            let file: AVAudioFile
-            do {
-                file = try AVAudioFile(forReading: fileURL)
-            } catch {
-                throw ReframeError.transcriptionUnavailable(reason: "The audio couldn't be read.")
-            }
-
-            // Collect results concurrently with the analysis, then finish through the end of
-            // the file so the last words are finalised.
-            let collector = Task<[TranscribedSegment], Error> {
-                var segments: [TranscribedSegment] = []
-                for try await result in transcriber.results where result.isFinal {
-                    if let segment = Self.segment(from: result.text) {
-                        segments.append(segment)
-                    }
+                do {
+                    try await installAssetsIfNeeded(locale: locale)
+                } catch {
+                    throw ReframeError.transcriptionUnavailable(
+                        reason: "The language pack couldn't be downloaded (\(error.localizedDescription)). Check the connection and try again."
+                    )
                 }
+            }
+
+            // The recogniser is fed decoded PCM, never the compressed file. Our caption
+            // sources are AAC .m4a (voiceover recordings, extracted reference audio), and
+            // `SpeechAnalyzer` rejects some compressed inputs with a bare Cocoa "data couldn't
+            // be read" — decoding through AVAudioFile first removes the whole failure class.
+            let pcmURL: URL
+            do {
+                pcmURL = try pcmCopy(of: fileURL)
+            } catch let error as ReframeError {
+                throw error
+            } catch {
+                throw ReframeError.transcriptionUnavailable(reason: "The audio couldn't be read (\(error.localizedDescription)).")
+            }
+            defer { try? FileManager.default.removeItem(at: pcmURL) }
+
+            do {
+                let segments = try await runAnalysis(fileURL: pcmURL, locale: locale)
+                DiagnosticsLog.shared.info("captions", "transcribed \(segments.count) segment(s) from \(fileURL.lastPathComponent)")
                 return segments
-            }
-
-            do {
-                if let last = try await analyzer.analyzeSequence(from: file) {
-                    try await analyzer.finalizeAndFinish(through: last)
-                } else {
-                    await analyzer.cancelAndFinishNow()
-                }
+            } catch let error as ReframeError {
+                throw error
             } catch {
-                collector.cancel()
-                throw ReframeError.transcriptionUnavailable(reason: "Transcription stopped: \(error.localizedDescription)")
+                // Whatever escapes the analyzer gets context before it reaches a screen.
+                DiagnosticsLog.shared.warning("captions", "analysis failed for \(fileURL.lastPathComponent): \(error)")
+                throw ReframeError.transcriptionUnavailable(reason: "Transcription failed (\(error.localizedDescription)).")
             }
-
-            let segments = try await collector.value
-            DiagnosticsLog.shared.info("captions", "transcribed \(segments.count) segment(s) from \(fileURL.lastPathComponent)")
-            return segments
         }
         #endif
         throw ReframeError.transcriptionUnavailable(reason: "On-device transcription needs iOS 26.")
