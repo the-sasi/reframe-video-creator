@@ -324,9 +324,12 @@ private struct HomeTile: View {
                     Text(title)
                         .font(.system(.subheadline, design: .rounded, weight: .semibold))
                         .foregroundStyle(Theme.Palette.primaryText)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                     Text(detail)
                         .font(Theme.Font.caption)
                         .foregroundStyle(Theme.Palette.secondaryText)
+                        .lineLimit(2)
                 }
                 Spacer(minLength: 0)
             }

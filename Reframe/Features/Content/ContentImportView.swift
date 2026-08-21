@@ -454,7 +454,7 @@ struct ContentImportView: View {
                     model.assets.remove(id: id)
                 }
             } else {
-                addRow(systemImage: "music.note", title: "Add music", subtitle: "From Files — an MP3, M4A or WAV you own") {
+                addRow(systemImage: "music.note", title: "Add music", subtitle: "From Files — an MP3, M4A, AAC or WAV you own") {
                     isImportingMusic = true
                 }
             }

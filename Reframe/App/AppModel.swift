@@ -259,7 +259,7 @@ final class AppModel {
         guard let document else { return }
 
         var bestAssignment = assignment
-        var bestQuality = EditQuality.score(timeline: document.timeline, beatGrid: activeBeatGrid)
+        var bestQuality = EditQuality.score(timeline: document.timeline, beatGrid: activeBeatGrid, assets: assets)
         var seed = 1
         while seed <= 3, bestQuality.issues.contains(where: {
             $0.kind == .adjacentRepeat || $0.kind == .overusedAsset || $0.kind == .lowDiversity
@@ -267,7 +267,7 @@ final class AppModel {
             await autoArrange(shuffleSeed: seed)
             bindTimeline()
             guard let retry = self.document else { break }
-            let quality = EditQuality.score(timeline: retry.timeline, beatGrid: activeBeatGrid)
+            let quality = EditQuality.score(timeline: retry.timeline, beatGrid: activeBeatGrid, assets: assets)
             if quality.total > bestQuality.total {
                 bestQuality = quality
                 bestAssignment = assignment

@@ -269,7 +269,7 @@ struct EditorView: View {
             document.perform(.setAudioMuted(id: clip.id, isMuted: !clip.isMuted, wasMuted: clip.isMuted))
         }
         ToolButton(title: "Start here", systemImage: "arrow.right.to.line") {
-            document.perform(.retimeAudioClip(id: clip.id, start: max(0, currentTime), duration: clip.duration, sourceStart: clip.sourceStart,
+            document.perform(.retimeAudioClip(id: clip.id, start: min(max(0, currentTime), max(0, document.timeline.duration - min(1.0, clip.duration))), duration: clip.duration, sourceStart: clip.sourceStart,
                                               wasStart: clip.start, wasDuration: clip.duration, wasSourceStart: clip.sourceStart))
         }
         ToolButton(title: "Split", systemImage: "scissors") {

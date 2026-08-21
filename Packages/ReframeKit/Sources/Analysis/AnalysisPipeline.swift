@@ -271,13 +271,19 @@ public actor AnalysisPipeline {
             scenePalettes: scenePalettes,
             audio: audio
         )
-        let recipe = compiler.compile(
+        var recipe = compiler.compile(
             analysis,
             title: title ?? defaultTitle(for: source),
             // Explicitly injected rather than taken inside the compiler, so the compiler stays
             // a pure function and its output stays diffable in tests.
             createdAt: Date()
         )
+        // Photos picks are staged as "reference-<UUID>.mov", so the filename carries no
+        // meaning. Title from what the analysis *found* instead — "Fast Cuts · 11s" beats
+        // UUID soup in the nav bar, the projects grid and the template library.
+        if title == nil, Self.looksLikeStagedName(source.url) {
+            recipe.title = "\(recipe.stats.pacingDescription) · \(Int(source.info.duration.rounded()))s"
+        }
         update(.buildStyle, .done(summary: "\(recipe.stats.sceneCount) slots ready"))
         logSummary(recipe)
 
@@ -344,6 +350,17 @@ public actor AnalysisPipeline {
             source.info.duration, source.info.width, source.info.height,
             Int(source.info.fps.rounded())
         )
+    }
+
+    /// Our own import staging names: `reference-<UUID>`, `picked-<UUID>`. Nothing a person
+    /// would recognise as theirs.
+    static func looksLikeStagedName(_ url: URL) -> Bool {
+        let name = url.deletingPathExtension().lastPathComponent
+        for prefix in ["reference-", "picked-"] where name.hasPrefix(prefix) {
+            let suffix = name.dropFirst(prefix.count)
+            if suffix.count >= 32, suffix.allSatisfy({ $0.isHexDigit || $0 == "-" }) { return true }
+        }
+        return false
     }
 
     private func defaultTitle(for source: MediaSource) -> String {

@@ -127,7 +127,12 @@ struct AudioSheet: View {
                         document.perform(.setAudioMuted(id: clip.id, isMuted: !clip.isMuted, wasMuted: clip.isMuted))
                     }
                     Chip(title: "Start at playhead", systemImage: "arrow.right.to.line") {
-                        document.perform(.retimeAudioClip(id: clip.id, start: currentTime, duration: clip.duration, sourceStart: clip.sourceStart,
+                        // Clamped so the track keeps at least a second under the video — a
+                        // playhead parked at the end would otherwise move the whole clip past
+                        // it, which plays as silence and reads as "audio is broken".
+                        let overlap = min(1.0, clip.duration)
+                        let start = min(max(0, currentTime), max(0, timeline.duration - overlap))
+                        document.perform(.retimeAudioClip(id: clip.id, start: start, duration: clip.duration, sourceStart: clip.sourceStart,
                                                           wasStart: clip.start, wasDuration: clip.duration, wasSourceStart: clip.sourceStart))
                     }
                     Chip(title: "Fit to video", systemImage: "rectangle.expand.vertical") {
@@ -204,7 +209,7 @@ struct AudioSheet: View {
         } header: {
             Text("Add")
         } footer: {
-            Text("MP3, M4A or WAV you own. Apple Music downloads are protected and can't be used. A voiceover is placed at the playhead and the music dips under it automatically.")
+            Text("MP3, M4A, AAC or WAV you own. Apple Music downloads are protected and can't be used. A voiceover is placed at the playhead and the music dips under it automatically.")
         }
     }
 

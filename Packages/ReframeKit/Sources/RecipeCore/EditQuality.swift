@@ -18,6 +18,7 @@ public struct EditQuality: Sendable, Hashable {
             case tooShortClip       // clip shorter than perception allows
             case offGridCut         // beat-planned edit with cuts off the grid
             case lowDiversity       // few distinct assets across many slots
+            case longStillScene     // many seconds of a single photo
         }
 
         public var kind: Kind
@@ -56,9 +57,13 @@ public struct EditQuality: Sendable, Hashable {
 
     // MARK: - Scoring
 
+    /// A still photo can hold a shot for a while; past this it reads as a stalled video.
+    public static let longStillThreshold: Double = 7.0
+
     public static func score(
         timeline: Timeline,
-        beatGrid: BeatGrid? = nil
+        beatGrid: BeatGrid? = nil,
+        assets: AssetPool? = nil
     ) -> EditQuality {
         let clips = timeline.clips
         guard !clips.isEmpty else {
@@ -88,6 +93,20 @@ public struct EditQuality: Sendable, Hashable {
         }
         let shortCount = issues.filter { $0.kind == .tooShortClip }.count
         let coverage = (Double(filled) / Double(clips.count)) * max(0, 1 - Double(shortCount) / Double(clips.count))
+
+        // --- Long stills: a photo dragged across many seconds of timeline. Flagged, and a
+        // mild penalty at the end — arrangement can't fix it, but the log should say it. ---
+        if let assets {
+            for (index, clip) in clips.enumerated() {
+                guard let id = clip.assetID, let asset = assets[id], asset.kind == .image else { continue }
+                if clip.duration > longStillThreshold {
+                    issues.append(Issue(
+                        kind: .longStillScene, clipIndex: index,
+                        detail: String(format: "scene %d is %.0fs of a single photo", index + 1, clip.duration)
+                    ))
+                }
+            }
+        }
 
         // --- Continuity: no asset twice in a row. ---
         var adjacentRepeats = 0
@@ -162,6 +181,10 @@ public struct EditQuality: Sendable, Hashable {
         // while guaranteeing the edit reads as needing repair.
         if issues.contains(where: { $0.kind == .emptySlot }) {
             total = min(total, Self.acceptableThreshold - 0.1)
+        }
+        let longStills = issues.filter { $0.kind == .longStillScene }.count
+        if longStills > 0 {
+            total = max(0, total - 0.05 * Double(longStills))
         }
         return EditQuality(
             total: min(max(total, 0), 1),

@@ -531,6 +531,16 @@ section("Edit quality: catches empty slots, repeats and off-grid cuts") {
     timeline.clips = [clip(a, 0, 1.0), clip(b, 1.0, 0.5), clip(c, 1.5, 1.0), clip(a, 2.5, 1.0)]
     let onGrid = EditQuality.score(timeline: timeline, beatGrid: grid)
     check(onGrid.rhythm == 1.0, "on-grid cuts score full rhythm")
+
+    // A photo dragged across 17 s of timeline is flagged; the same duration on video is not.
+    let (pool, refs) = samplePool(count: 4)
+    let photo = refs[0], video = refs[2]
+    timeline.clips = [clip(photo.id, 0, 16.9), clip(video.id, 16.9, 0.7)]
+    let still = EditQuality.score(timeline: timeline, assets: pool)
+    check(still.issues.contains { $0.kind == .longStillScene }, "flags a long still scene")
+    timeline.clips = [clip(video.id, 0, 16.9), clip(photo.id, 16.9, 0.7)]
+    let motion = EditQuality.score(timeline: timeline, assets: pool)
+    check(!motion.issues.contains { $0.kind == .longStillScene }, "long video scene is fine")
 }
 
 print("")

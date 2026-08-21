@@ -124,7 +124,14 @@ enum MediaImport {
         }
 
         let asset = AVURLAsset(url: destination)
-        let duration = (try? await asset.load(.duration).seconds) ?? 0
+        // AVAsset estimates the duration of raw ADTS .aac (and some VBR MP3s) from bitrate,
+        // which can be wildly short. AVAudioFile counts frames, so prefer it when it can open
+        // the file at all.
+        var duration = (try? await asset.load(.duration).seconds) ?? 0
+        if let file = try? AVAudioFile(forReading: destination), file.processingFormat.sampleRate > 0 {
+            let exact = Double(file.length) / file.processingFormat.sampleRate
+            if exact > 0 { duration = exact }
+        }
         let hasAudio = ((try? await asset.loadTracks(withMediaType: .audio)) ?? []).isEmpty == false
         guard duration > 0, hasAudio else {
             try? FileManager.default.removeItem(at: destination)

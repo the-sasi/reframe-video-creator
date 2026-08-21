@@ -41,7 +41,7 @@ public struct AssetMapper: Sendable {
         public init(
             framingMismatch: Double = 1.0,
             aesthetics: Double = 0.8,
-            utilityPenalty: Double = 3.0,
+            utilityPenalty: Double = 4.5,
             aspectMismatch: Double = 0.5,
             sourceKindMismatch: Double = 0.35,
             insufficientDuration: Double = 1.2,
@@ -392,7 +392,7 @@ public struct AssetMapper: Sendable {
             parts.append("video")
         }
         if features?.isUtility == true {
-            parts.append("looks like a screenshot")
+            parts.append("looks like a screenshot — swap it if you have a real photo")
         }
         if isReuse {
             parts.append("reused — add more photos to avoid")

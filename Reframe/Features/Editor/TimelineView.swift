@@ -214,6 +214,15 @@ final class TimelineScrollView: UIView, UIScrollViewDelegate, UIGestureRecognize
         playheadLine.frame = CGRect(x: bounds.midX - 1, y: 4, width: 2, height: bounds.height - 8)
         playheadKnob.frame = CGRect(x: bounds.midX - 4, y: 0, width: 8, height: 8)
         updateContentSize()
+        // First layout, or a size change (rotation, sheet resize): the content insets just
+        // moved under the fixed playhead, so re-centre on the model's time.
+        if bounds.width > 0, bounds.width != lastLayoutWidth || pendingTime != nil {
+            lastLayoutWidth = bounds.width
+            let target = pendingTime ?? coordinator?.parent.currentTime
+            if let target, !scrollView.isTracking, !scrollView.isDecelerating {
+                setTime(target, animated: false)
+            }
+        }
     }
 
     func configure(timeline: Timeline, assets: AssetPool, beatGrid: BeatGrid?, waveforms: [UUID: Waveform]) {
@@ -254,8 +263,18 @@ final class TimelineScrollView: UIView, UIScrollViewDelegate, UIGestureRecognize
         Double(scrollView.contentOffset.x + bounds.width / 2) * secondsPerPoint
     }
 
+    /// A time requested before the first layout (SwiftUI calls updateUIView with zero bounds),
+    /// replayed from layoutSubviews. Without this the strip opens left-aligned while the
+    /// centred playhead reads ~2 s in.
+    private var pendingTime: Double?
+    private var lastLayoutWidth: CGFloat = 0
+
     func setTime(_ time: Double, animated: Bool) {
-        guard bounds.width > 0 else { return }
+        guard bounds.width > 0 else {
+            pendingTime = time
+            return
+        }
+        pendingTime = nil
         let x = CGFloat(time / secondsPerPoint) - bounds.width / 2
         guard abs(x - scrollView.contentOffset.x) > 0.5 else { return }
         isApplyingProgrammaticOffset = true

@@ -82,7 +82,15 @@ struct RecipeSummaryView: View {
                 Fact(value: String(format: "%.1fs", recipe.duration), label: "duration")
                 Fact(value: "\(recipe.stats.sceneCount)", label: recipe.stats.sceneCount == 1 ? "scene" : "scenes")
                 Fact(value: recipe.source.aspect.displayName, label: "format")
-                Fact(value: recipe.beatGrid.map { "\(Int($0.bpm.value.rounded()))" } ?? "—", label: "BPM")
+                // A tempo the analyser wasn't reasonably sure about is a guess from ambient
+                // noise, not a fact about the video — the rhythm section below carries the
+                // badge and the basis; this grid only states what's solid.
+                Fact(
+                    value: recipe.beatGrid.flatMap {
+                        $0.bpm.confidence >= ConfidenceBand.fallbackThreshold ? "\(Int($0.bpm.value.rounded()))" : nil
+                    } ?? "—",
+                    label: "BPM"
+                )
                 Fact(value: "\(recipe.stats.textSlotCount)", label: "text layers")
                 Fact(value: "\(recipe.scenes.filter { $0.move.effectiveKind != .none }.count)", label: "camera moves")
                 Fact(value: "\(recipe.stats.transitionCount)", label: "transitions")
