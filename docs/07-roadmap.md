@@ -11,6 +11,7 @@
 | **5 — Audio** | Mix planner, music / voice / reference / clip audio, ducking, voiceover recording, extraction, waveforms | ✅ Built |
 | **6 — Captions & text** | On-device transcription → timed captions; fonts, weights, outline, pill, presets | ✅ Built (captions optional, iOS 26) |
 | **7 — Product** | Templates library, autosave, recovery, thumbnails, rename/duplicate/favourite, export presets, appearance | ✅ Built |
+| **7b — Music-driven editing** | `MusicSectionizer` (intro/build/peak/release/outro from energy), `MusicEditPlanner` (beats + sections → recipe), `EditQuality` score with arrange-repair, "Edit to Music" flow | ✅ Built Aug 2026 |
 | **8 — Device validation** | Real references, real photos, measured performance | ⬜ **Owner's step** — see [09](09-device-testing.md) |
 | **9 — Advanced editing** | Keyframes, picture-in-picture, masks, LUTs, speed ramps, reverse/freeze | ⬜ Not built — P2, see below |
 | **10 — Generative** | B-roll, image animation, background generation | ⬜ Not built — see below |

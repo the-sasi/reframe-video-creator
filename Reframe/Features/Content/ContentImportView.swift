@@ -26,6 +26,14 @@ struct ContentImportView: View {
 
     private var slotCount: Int { model.recipe?.assetSlotCount ?? 0 }
     private var hasEnoughAssets: Bool { !model.assets.visuals.isEmpty }
+    /// Flow B cannot generate without an analysed track.
+    private var canContinue: Bool {
+        guard hasEnoughAssets else { return false }
+        if model.wantsMusicEdit && model.recipe == nil {
+            return model.musicProfile != nil && !model.isAnalyzingMusic
+        }
+        return true
+    }
 
     var body: some View {
         ScrollView {
@@ -59,9 +67,11 @@ struct ContentImportView: View {
         }
         .safeAreaInset(edge: .bottom) {
             PrimaryButton(
-                title: model.recipe == nil ? "Create Video" : "Auto Arrange",
+                title: model.wantsMusicEdit && model.recipe == nil
+                    ? "Create to Music"
+                    : (model.recipe == nil ? "Create Video" : "Auto Arrange"),
                 systemImage: model.recipe == nil ? "sparkles" : "wand.and.rays",
-                isEnabled: hasEnoughAssets,
+                isEnabled: canContinue,
                 isBusy: isPreparing
             ) {
                 Task { await arrange() }
@@ -595,20 +605,28 @@ struct ContentImportView: View {
         // No recipe means "Start From Scratch". There are no slots to map assets into, so skip
         // straight to a default timeline and the editor rather than walking into a mapping
         // screen with nothing to show.
-        guard model.recipe != nil else {
-            DiagnosticsLog.shared.info(
-                "content", "scratch build from \(model.assets.visuals.count) assets"
-            )
-            await model.createVideoAndEdit()
-            return
+        if model.recipe == nil {
+            // Flow B: plan the recipe from the analysed track, then continue like any other
+            // recipe-driven flow — mapping screen, editor, the lot.
+            if model.wantsMusicEdit {
+                guard model.generateMusicRecipe() else {
+                    DiagnosticsLog.shared.warning("music-edit", "generate requested with no analysed track")
+                    return
+                }
+            } else {
+                DiagnosticsLog.shared.info(
+                    "content", "scratch build from \(model.assets.visuals.count) assets"
+                )
+                await model.createVideoAndEdit()
+                return
+            }
         }
 
         DiagnosticsLog.shared.info(
             "content",
             "arranging \(model.assets.visuals.count) assets into \(slotCount) slots"
         )
-        await model.autoArrange()
-        model.bindTimeline()
+        await model.arrangeAndBind()
         model.path.append(.mapping)
     }
 }

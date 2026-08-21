@@ -56,6 +56,13 @@ final class AppModel {
     /// Beat grid of the user's music, analysed with the same detector the reference went
     /// through. Nil until a track has been added and analysed.
     var musicBeatGrid: BeatGrid?
+    /// Full analysis of the user's music track (beats + energy structure), kept alongside the
+    /// grid so a music-first flow can plan from it. Transient: rebuilt whenever a track is
+    /// analysed, and the recipe it produces is what persists.
+    var musicProfile: MusicEditPlanner.MusicProfile?
+    /// True when the user chose "Edit to Music": the content screen requires a track and the
+    /// arrange step plans the recipe from it instead of expecting one from analysis.
+    var wantsMusicEdit = false
     var isAnalyzingMusic = false
 
     /// The grid the timeline snaps to: the user's music when there is one, else the reference's.
@@ -128,6 +135,14 @@ final class AppModel {
         path.append(.contentImport)
     }
 
+    /// Flow B: music first. The recipe is planned from the track's beats and energy once the
+    /// user has added media and a song on the content screen.
+    func startFromMusicEdit() {
+        resetFlow()
+        wantsMusicEdit = true
+        path.append(.contentImport)
+    }
+
     /// Begins a project from a saved or built-in style.
     func startFromTemplate(_ recipe: EditRecipe) {
         resetFlow()
@@ -153,6 +168,8 @@ final class AppModel {
         matchReferenceLook = false
         referenceURL = nil
         musicBeatGrid = nil
+        musicProfile = nil
+        wantsMusicEdit = false
         autosaveTask?.cancel()
     }
 
@@ -168,8 +185,16 @@ final class AppModel {
         do {
             guard let analysis = try await AudioAnalyzer().analyze(asset: asset), !analysis.beats.isEmpty else {
                 musicBeatGrid = nil
+                musicProfile = nil
                 return
             }
+            musicProfile = MusicEditPlanner.MusicProfile(
+                bpm: analysis.bpm, bpmConfidence: analysis.bpmConfidence,
+                beats: analysis.beats, downbeats: analysis.downbeats,
+                energyCurve: analysis.energyCurve, energySamplesPerSecond: 4,
+                duration: reference.duration > 0 ? reference.duration : (analysis.beats.last ?? 0) + 1,
+                fingerprint: reference.id.uuidString
+            )
             musicBeatGrid = BeatGrid(
                 bpm: Confident(analysis.bpm, confidence: analysis.bpmConfidence, basis: analysis.bpmBasis),
                 beats: analysis.beats,
@@ -194,6 +219,69 @@ final class AppModel {
             "audio", String(format: "snapped %d cuts to music, mean shift %.0f ms", result.movedBoundaries, result.meanShift * 1000)
         )
         return result
+    }
+
+    /// Flow B's generate step: plans a recipe from the analysed music. Returns false when no
+    /// analysed track is available (the content screen disables the button, so reaching this
+    /// without one is a race, not a flow).
+    @discardableResult
+    func generateMusicRecipe() -> Bool {
+        guard let profile = musicProfile else { return false }
+        let visuals = assets.visuals
+        var recipe = MusicEditPlanner.plan(
+            music: profile,
+            options: MusicEditPlanner.Options(
+                canvas: .reel1080,
+                maxDuration: min(60, profile.duration),
+                assetCount: max(visuals.count, 1)
+            )
+        )
+        recipe.createdAt = Date()
+        if let musicID = content.musicAssetID, let track = assets[musicID] {
+            recipe.title = "To \(track.displayName)"
+        }
+        self.recipe = recipe
+        fidelity = .closeMatch
+        DiagnosticsLog.shared.info(
+            "music-edit",
+            String(format: "planned %d scenes over %.1fs at %.0f BPM", recipe.scenes.count, recipe.duration, profile.bpm)
+        )
+        return true
+    }
+
+    /// Auto Arrange, bind, then score — and quietly re-arrange with a different shuffle seed
+    /// when the score flags an obviously bad result (same photo back to back, one asset
+    /// everywhere). Bounded: a few solver runs at milliseconds each, then the best wins.
+    /// Locked slots are respected throughout because `autoArrange` always is.
+    func arrangeAndBind() async {
+        await autoArrange()
+        bindTimeline()
+        guard let document else { return }
+
+        var bestAssignment = assignment
+        var bestQuality = EditQuality.score(timeline: document.timeline, beatGrid: activeBeatGrid)
+        var seed = 1
+        while seed <= 3, bestQuality.issues.contains(where: {
+            $0.kind == .adjacentRepeat || $0.kind == .overusedAsset || $0.kind == .lowDiversity
+        }) {
+            await autoArrange(shuffleSeed: seed)
+            bindTimeline()
+            guard let retry = self.document else { break }
+            let quality = EditQuality.score(timeline: retry.timeline, beatGrid: activeBeatGrid)
+            if quality.total > bestQuality.total {
+                bestQuality = quality
+                bestAssignment = assignment
+            }
+            seed += 1
+        }
+        if assignment != bestAssignment {
+            assignment = bestAssignment
+            bindTimeline()
+        }
+        DiagnosticsLog.shared.info("quality", bestQuality.summary)
+        for issue in bestQuality.issues.prefix(6) {
+            DiagnosticsLog.shared.warning("quality", issue.detail)
+        }
     }
 
     /// Builds a timeline with no recipe — the "Start From Scratch" path.

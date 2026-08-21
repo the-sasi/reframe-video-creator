@@ -76,6 +76,9 @@ your own text), *Use Structure* (just the cut skeleton)
   entrance/exit animation, timing; drag on the preview to place it
 - Audio: music, voiceover recording, the reference's own soundtrack (opt-in), clip sound,
   levels, fades, mute, ducking under voice
+- **Edit to Music**: pick a song and your media; the app reads its beats, downbeats and energy
+  arc (intro → build → peak → release → outro) and plans the cut density, motion and
+  transitions per section — then it's a normal editable project like any other
 - Captions from speech, on device, with words appearing as spoken (iOS 26)
 - Canvas 9:16 / 4:5 / 1:1 / 16:9 with crops re-solved around subjects; Fill / Fit / Smart crop
 - Filters, colour, vignette, grain; ten transitions with duration and direction

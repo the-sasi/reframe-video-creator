@@ -147,20 +147,29 @@ struct HomeView: View {
     }
 
     private var secondaryTiles: some View {
-        HStack(spacing: Theme.Space.s) {
+        VStack(spacing: Theme.Space.s) {
             HomeTile(
-                title: "Templates",
-                detail: "\(model.templates.count) styles",
-                systemImage: "square.grid.2x2"
+                title: "Edit to Music",
+                detail: "Cuts that follow your song",
+                systemImage: "music.note"
             ) {
-                model.path.append(.templates)
+                model.startFromMusicEdit()
             }
-            HomeTile(
-                title: "From Scratch",
-                detail: "Your own timing",
-                systemImage: "square.stack.3d.up"
-            ) {
-                model.startFromScratch()
+            HStack(spacing: Theme.Space.s) {
+                HomeTile(
+                    title: "Templates",
+                    detail: "\(model.templates.count) styles",
+                    systemImage: "square.grid.2x2"
+                ) {
+                    model.path.append(.templates)
+                }
+                HomeTile(
+                    title: "From Scratch",
+                    detail: "Your own timing",
+                    systemImage: "square.stack.3d.up"
+                ) {
+                    model.startFromScratch()
+                }
             }
         }
     }

@@ -411,6 +411,128 @@ section("Starter templates bind cleanly") {
     }
 }
 
+section("Music sections: quiet-loud-quiet segments as intro/peak/outro") {
+    // 60 s at 4 Hz: 15 s low, 10 s rising, 15 s high, 10 s falling, 10 s low.
+    var curve: [Double] = []
+    curve += Array(repeating: 0.1, count: 60)
+    curve += (0..<40).map { 0.1 + 0.8 * Double($0) / 39 }
+    curve += Array(repeating: 0.95, count: 60)
+    curve += (0..<40).map { 0.9 - 0.7 * Double($0) / 39 }
+    curve += Array(repeating: 0.12, count: 40)
+    let sections = MusicSectionizer.sections(energyCurve: curve, samplesPerSecond: 4, duration: 60)
+    check(!sections.isEmpty, "produced sections (\(sections.count))")
+    check(sections.first?.kind == .intro, "starts with intro (\(sections.first?.kind.rawValue ?? "none"))")
+    check(sections.contains { $0.kind == .peak }, "found the peak")
+    check(sections.last?.kind == .outro, "ends with outro (\(sections.last?.kind.rawValue ?? "none"))")
+    check(abs((sections.last?.end ?? 0) - 60) < 1e-6, "covers the full duration")
+    for (a, b) in zip(sections, sections.dropFirst()) { check(abs(a.end - b.start) < 1e-6, "contiguous") }
+    // Deterministic.
+    check(sections == MusicSectionizer.sections(energyCurve: curve, samplesPerSecond: 4, duration: 60), "deterministic")
+    // Degenerate inputs do not crash and still cover the track.
+    let flat = MusicSectionizer.sections(energyCurve: Array(repeating: 0.5, count: 100), samplesPerSecond: 4, duration: 25)
+    check(flat.count == 1 && flat[0].kind == .steady, "flat curve is one steady section")
+    let empty = MusicSectionizer.sections(energyCurve: [], samplesPerSecond: 4, duration: 10)
+    check(empty.count == 1 && abs(empty[0].end - 10) < 1e-6, "empty curve still covers duration")
+}
+
+section("Music planner: sections pace the cut density") {
+    // 120 BPM for 40 s: beat every 0.5 s. Energy: 10 s low, 10 s rise, 12 s high, 8 s fall.
+    let bpm = 120.0
+    let beats = stride(from: 0.0, through: 40.0, by: 0.5).map { $0 }
+    let downbeats = stride(from: 0.0, through: 40.0, by: 2.0).map { $0 }
+    var curve: [Double] = []
+    curve += Array(repeating: 0.1, count: 40)
+    curve += (0..<40).map { 0.1 + 0.8 * Double($0) / 39 }
+    curve += Array(repeating: 0.95, count: 48)
+    curve += (0..<32).map { 0.9 - 0.75 * Double($0) / 31 }
+    let profile = MusicEditPlanner.MusicProfile(
+        bpm: bpm, bpmConfidence: 0.9, beats: beats, downbeats: downbeats,
+        energyCurve: curve, energySamplesPerSecond: 4, duration: 40, fingerprint: "check-track"
+    )
+    let recipe = MusicEditPlanner.plan(music: profile, options: .init(maxDuration: 40, assetCount: 12))
+    check(recipe.scenes.count >= 6, "planned scenes (\(recipe.scenes.count))")
+    check(recipe.beatGrid?.cutsAlignedToBeats.value == true, "declares beat alignment")
+    check(recipe.audio.suggestedCutStyle == .onBeat, "suggests on-beat cutting")
+    check(abs(recipe.duration - (recipe.scenes.last?.end ?? 0)) < 1e-6, "duration matches scenes")
+    for (a, b) in zip(recipe.scenes, recipe.scenes.dropFirst()) {
+        check(abs(a.end - b.start) < 1e-6, "scenes contiguous")
+        check(a.duration > 0.3, "no micro-scene (\(a.duration))")
+    }
+    // Every interior boundary lands on a planned beat.
+    let beatSet = Set(beats.map { Int(($0 * 1000).rounded()) })
+    for scene in recipe.scenes.dropLast() {
+        check(beatSet.contains(Int((scene.end * 1000).rounded())), "cut on beat (\(scene.end))")
+    }
+    // The loud stretch cuts faster than the quiet opening.
+    let early = recipe.scenes.filter { $0.start < 10 }.map(\.duration)
+    let peak = recipe.scenes.filter { $0.start >= 20 && $0.start < 32 }.map(\.duration)
+    if let e = early.first, let p = peak.min() {
+        check(e > p, "intro shot (\(e)s) longer than peak shot (\(p)s)")
+    } else {
+        check(false, "expected scenes in both regions")
+    }
+    // Deterministic, and the recipe binds through the normal pipeline.
+    check(MusicEditPlanner.plan(music: profile, options: .init(maxDuration: 40, assetCount: 12)) == recipe, "deterministic plan")
+    let (pool, refs) = samplePool(count: 6)
+    var assignment = AssetAssignment()
+    for (i, scene) in recipe.scenes.enumerated() { assignment[scene.slot.id] = refs[i % refs.count].id }
+    let timeline = RecipeBinder().bind(recipe: recipe, assets: pool, assignment: assignment, content: UserContent())
+    check(timeline.clips.count == recipe.scenes.count, "binds all scenes")
+    // Codable round trip like any other recipe.
+    let data = try RecipeSchema.encoder.encode(recipe)
+    let decoded = try RecipeSchema.decodeRecipe(data)
+    check(decoded == recipe, "codable round trip")
+    // No beats at all: still plans a usable edit.
+    let dry = MusicEditPlanner.plan(
+        music: .init(bpm: 0, bpmConfidence: 0, beats: [], downbeats: [], energyCurve: [],
+                     duration: 20, fingerprint: "no-beats"),
+        options: .init(maxDuration: 20, assetCount: 5)
+    )
+    check(dry.scenes.count >= 4, "beatless track still plans (\(dry.scenes.count) scenes)")
+}
+
+section("Edit quality: catches empty slots, repeats and off-grid cuts") {
+    let canvas = CanvasSpec.reel1080
+    let a = UUID(), b = UUID(), c = UUID()
+    func clip(_ id: UUID?, _ start: Double, _ duration: Double) -> VideoClip {
+        VideoClip(assetID: id, slotID: "s\(Int(start * 100))", start: start, duration: duration)
+    }
+    var timeline = Timeline(id: UUID(), canvas: canvas, recipeID: nil)
+    timeline.clips = [clip(a, 0, 1), clip(b, 1, 1), clip(c, 2, 1), clip(a, 3, 1)]
+    let good = EditQuality.score(timeline: timeline)
+    check(good.isAcceptable && good.issues.isEmpty, "clean edit scores clean (\(good.summary))")
+
+    // Same asset back to back.
+    timeline.clips = [clip(a, 0, 1), clip(a, 1, 1), clip(b, 2, 1), clip(c, 3, 1)]
+    let repeated = EditQuality.score(timeline: timeline)
+    check(repeated.issues.contains { $0.kind == .adjacentRepeat }, "flags adjacent repeat")
+    check(repeated.total < good.total, "repeat scores lower")
+
+    // Empty slot and a two-frame clip.
+    timeline.clips = [clip(a, 0, 1), clip(nil, 1, 1), clip(b, 2, canvas.frameDuration * 2)]
+    let broken = EditQuality.score(timeline: timeline)
+    check(broken.issues.contains { $0.kind == .emptySlot }, "flags empty slot")
+    check(broken.issues.contains { $0.kind == .tooShortClip }, "flags too-short clip")
+    check(!broken.isAcceptable, "broken edit rejected (\(broken.summary))")
+
+    // One asset everywhere.
+    timeline.clips = [clip(a, 0, 1), clip(b, 1, 1), clip(a, 2, 1), clip(b, 3, 1), clip(a, 4, 1), clip(a, 5, 1)]
+    let lopsided = EditQuality.score(timeline: timeline)
+    check(lopsided.issues.contains { $0.kind == .overusedAsset }, "flags overused asset")
+
+    // Beat-planned edit whose cuts miss the grid.
+    let grid = BeatGrid(
+        bpm: .measured(120), beats: stride(from: 0.0, through: 8.0, by: 0.5).map { $0 },
+        downbeats: [0, 2, 4, 6, 8], cutsAlignedToBeats: .measured(true)
+    )
+    timeline.clips = [clip(a, 0, 0.73), clip(b, 0.73, 0.91), clip(c, 1.64, 0.77), clip(a, 2.41, 1.0)]
+    let offGrid = EditQuality.score(timeline: timeline, beatGrid: grid)
+    check(offGrid.issues.contains { $0.kind == .offGridCut }, "flags off-grid cuts")
+    timeline.clips = [clip(a, 0, 1.0), clip(b, 1.0, 0.5), clip(c, 1.5, 1.0), clip(a, 2.5, 1.0)]
+    let onGrid = EditQuality.score(timeline: timeline, beatGrid: grid)
+    check(onGrid.rhythm == 1.0, "on-grid cuts score full rhythm")
+}
+
 print("")
 print(failures == 0 ? "ALL \(passes) CHECKS PASSED" : "\(failures) FAILED, \(passes) passed")
 exit(failures == 0 ? 0 : 1)
