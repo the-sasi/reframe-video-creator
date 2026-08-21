@@ -50,7 +50,9 @@ struct Chip: View {
                     Image(systemName: systemImage).font(.system(size: 11, weight: .semibold))
                 }
                 Text(title).font(.system(size: 13, weight: .medium, design: .rounded))
+                    .lineLimit(1)
             }
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .foregroundStyle(isSelected ? Theme.Palette.onAccent : Theme.Palette.primaryText)

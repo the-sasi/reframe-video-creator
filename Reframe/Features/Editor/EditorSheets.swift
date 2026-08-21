@@ -395,8 +395,13 @@ struct CaptionsSheet: View {
         ("Pill", .default), ("Bold", .bold), ("Minimal", .minimal),
     ]
 
+    /// Any audio track can carry speech — a downloaded reel audio is often someone talking.
+    /// Voice and reference first (most likely), then the rest; transcription itself reports
+    /// "no speech recognised" when a music pick turns out to be instrumental.
     private var candidates: [AudioClip] {
-        document.timeline.audio.filter { $0.role == .voice || $0.role == .reference }
+        let audio = document.timeline.audio
+        return audio.filter { $0.role == .voice || $0.role == .reference }
+            + audio.filter { $0.role != .voice && $0.role != .reference }
     }
 
     var body: some View {
@@ -409,8 +414,8 @@ struct CaptionsSheet: View {
                     } else if candidates.isEmpty {
                         EmptyStateView(
                             systemImage: "waveform.badge.mic",
-                            title: "Nothing to transcribe",
-                            message: "Record a voiceover or keep the reference's audio first. Captions are made from speech in an audio track."
+                            title: "No audio to transcribe",
+                            message: "Captions are made from speech in an audio track. Record a voiceover, keep the reference's audio, or add a track with talking in it."
                         )
                     } else {
                         VStack(alignment: .leading, spacing: 6) {

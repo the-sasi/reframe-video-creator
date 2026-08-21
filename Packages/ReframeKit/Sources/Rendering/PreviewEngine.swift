@@ -183,13 +183,25 @@ public final class PreviewEngine: NSObject {
         }
     }
 
+    /// Bumped for every audio seek; the render tick only trusts the audio clock when the
+    /// latest seek has completed. Without this, seeking while playing reads the player's old
+    /// position for a few frames and visibly snaps the playhead backwards.
+    private var audioSeekGeneration = 0
+    private var audioClockSettled = true
+
     private func startAudio(at time: Double) {
         guard let audioPlayer else { return }
+        audioSeekGeneration += 1
+        let generation = audioSeekGeneration
+        audioClockSettled = false
+        audioPlayer.pause()
         let target = CMTime(seconds: max(0, time), preferredTimescale: 44_100)
         audioPlayer.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
             // The completion handler is not main-actor-isolated; hop back before touching state.
             Task { @MainActor in
-                guard let self, self.isPlaying else { return }
+                guard let self, generation == self.audioSeekGeneration else { return }
+                self.audioClockSettled = true
+                guard self.isPlaying else { return }
                 self.audioPlayer?.play()
             }
         }
@@ -230,7 +242,7 @@ public final class PreviewEngine: NSObject {
             // people notice, and slaving video to it is how every player keeps sync. Without a
             // mix, advance from the view's own timestamps so a dropped frame skips time rather
             // than slowing the video down.
-            if let audioPlayer, audioPlayer.rate > 0 {
+            if let audioPlayer, audioPlayer.rate > 0, audioClockSettled {
                 let audioTime = audioPlayer.currentTime().seconds
                 if audioTime.isFinite, abs(audioTime - currentTime) > 0.04 {
                     currentTime = audioTime

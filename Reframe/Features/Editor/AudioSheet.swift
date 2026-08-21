@@ -122,6 +122,7 @@ struct AudioSheet: View {
                               onEditingChanged: gesture("audiofade:\(clip.id)")) { value in
                     document.perform(.setAudioFades(id: clip.id, fadeIn: clip.fadeIn, fadeOut: value, wasFadeIn: clip.fadeIn, wasFadeOut: clip.fadeOut))
                 }
+                ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Theme.Space.s) {
                     Chip(title: clip.isMuted ? "Unmute" : "Mute", systemImage: clip.isMuted ? "speaker.slash" : "speaker.wave.2", isSelected: clip.isMuted) {
                         document.perform(.setAudioMuted(id: clip.id, isMuted: !clip.isMuted, wasMuted: clip.isMuted))
@@ -149,12 +150,15 @@ struct AudioSheet: View {
                         HStack(spacing: 5) {
                             Image(systemName: "tag").font(.system(size: 11, weight: .semibold))
                             Text(clip.role.displayName).font(.system(size: 13, weight: .medium, design: .rounded))
+                                .lineLimit(1)
                             Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold))
                         }
+                        .fixedSize(horizontal: true, vertical: false)
                         .padding(.horizontal, 12).padding(.vertical, 7)
                         .foregroundStyle(Theme.Palette.primaryText)
                         .background(Theme.Palette.surfaceRaised, in: Capsule())
                     }
+                }
                 }
                 Button(role: .destructive) {
                     guard let index = timeline.audio.firstIndex(where: { $0.id == clip.id }) else { return }

@@ -204,10 +204,8 @@ struct EditorView: View {
         }
         .buttonStyle(.plain)
         ToolButton(title: "Add text", systemImage: "textformat") { addTextLayer(document: document) }
-        ToolButton(title: "Audio", systemImage: "music.note") { sheet = .audio }
         ToolButton(title: "Captions", systemImage: "captions.bubble") { sheet = .captions }
         ToolButton(title: "Canvas", systemImage: "aspectratio") { sheet = .canvas }
-        ToolButton(title: "Look", systemImage: "camera.filters") { sheet = .style }
         ToolButton(title: "Variations", systemImage: "wand.and.sparkles") { sheet = .variations }
         ToolButton(title: "Save style", systemImage: "square.and.arrow.down.on.square", isEnabled: model.recipe != nil) { sheet = .saveTemplate }
     }
@@ -292,7 +290,7 @@ struct EditorView: View {
         HStack(spacing: 0) {
             tab("Text", "textformat") { sheet = .text }
             tab("Audio", "music.note") { sheet = .audio }
-            tab("Look", "wand.and.rays") { sheet = .style }
+            tab("Filters", "camera.filters") { sheet = .style }
             tab("Export", "square.and.arrow.up") { model.path.append(.export) }
         }
         .background(.regularMaterial)

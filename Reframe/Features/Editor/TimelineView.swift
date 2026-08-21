@@ -877,11 +877,13 @@ final class TimelineContentView: UIView {
             context.fillPath()
         }
         if isSelected {
-            context.setStrokeColor(UIColor(Theme.Palette.accent).cgColor)
+            // White, not accent: the accent line is the playhead, and two identical oranges
+            // made "selected" and "now" read as the same thing.
+            context.setStrokeColor(UIColor.white.cgColor)
             context.setLineWidth(2)
             context.addPath(path.cgPath)
             context.strokePath()
-            drawHandles(in: inset, color: UIColor(Theme.Palette.accent), context: context)
+            drawHandles(in: inset, color: .white, context: context)
         }
     }
 
