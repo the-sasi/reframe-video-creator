@@ -291,7 +291,7 @@ struct EditorView: View {
             tab("Text", "textformat") { sheet = .text }
             tab("Audio", "music.note") { sheet = .audio }
             tab("Filters", "camera.filters") { sheet = .style }
-            tab("Export", "square.and.arrow.up") { model.path.append(.export) }
+            tab("Export", "square.and.arrow.up") { model.navigate(to: .export) }
         }
         .background(.regularMaterial)
     }

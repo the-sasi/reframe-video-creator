@@ -158,7 +158,7 @@ struct ReferenceImportView: View {
     }
 
     private func proceed(with url: URL) {
-        model.path.append(.analysis(url))
+        model.navigate(to: .analysis(url))
     }
 }
 

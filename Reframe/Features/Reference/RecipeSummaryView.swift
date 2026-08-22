@@ -52,7 +52,7 @@ struct RecipeSummaryView: View {
         }
         .safeAreaInset(edge: .bottom) {
             PrimaryButton(title: model.fidelity.displayName, systemImage: "arrow.right") {
-                model.path.append(.contentImport)
+                model.navigate(to: .contentImport)
             }
             .padding(Theme.Space.m)
             .background(.regularMaterial)

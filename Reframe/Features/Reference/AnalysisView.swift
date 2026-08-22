@@ -16,6 +16,9 @@ struct AnalysisView: View {
     @State private var progress = AnalysisProgress.initial
     @State private var task: Task<Void, Never>?
     @State private var isFinished = false
+    /// Set when analysis fails. The screen stays put and offers retry/diagnostics/back rather
+    /// than bouncing the user somewhere else with an alert.
+    @State private var failure: ReframeError?
 
     var body: some View {
         VStack(spacing: Theme.Space.xl) {
@@ -52,23 +55,70 @@ struct AnalysisView: View {
 
             Spacer(minLength: 0)
 
-            if !isFinished {
-                Button("Cancel") {
-                    task?.cancel()
-                    model.path.removeLast()
-                }
-                .font(Theme.Font.callout)
-                .foregroundStyle(Theme.Palette.secondaryText)
-                .minimumHitTarget()
-            }
+            exits
         }
         .padding(Theme.Space.m)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.Palette.background)
-        .navigationBarBackButtonHidden(true)
+        // Back is hidden only while work is genuinely in flight, so the gesture cannot
+        // orphan a running pipeline. The moment it finishes or fails, the exits below take
+        // over — the previous version hid it permanently, which is what made this screen a
+        // dead end once analysis completed.
+        .navigationBarBackButtonHidden(!isFinished && failure == nil)
         .navigationBarTitleDisplayMode(.inline)
         .task { await runAnalysis() }
         .onDisappear { task?.cancel() }
+    }
+
+    /// There is always a way out of this screen. That is the invariant the dead-end bug broke.
+    @ViewBuilder
+    private var exits: some View {
+        if let failure {
+            VStack(spacing: Theme.Space.s) {
+                Text(failure.presentation.title)
+                    .font(Theme.Font.sectionTitle)
+                Text(failure.presentation.message)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.Palette.secondaryText)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                PrimaryButton(title: "Try Again", systemImage: "arrow.clockwise") {
+                    self.failure = nil
+                    progress = .initial
+                    task = nil
+                    Task { await runAnalysis() }
+                }
+                HStack(spacing: Theme.Space.l) {
+                    Button("Choose Another") { model.goBack() }
+                    Button("Diagnostics") { model.navigate(to: .settings) }
+                }
+                .font(Theme.Font.callout)
+                .foregroundStyle(Theme.Palette.secondaryText)
+            }
+            .padding(.horizontal, Theme.Space.m)
+        } else if isFinished {
+            // Reachable by navigating back from the summary. The recipe already exists, so the
+            // useful action is to carry on with it — never to re-run and discard it.
+            VStack(spacing: Theme.Space.s) {
+                PrimaryButton(title: "Continue", systemImage: "arrow.right") {
+                    model.navigate(to: .recipeSummary)
+                }
+                Button("Start Over") { model.goBack() }
+                    .font(Theme.Font.callout)
+                    .foregroundStyle(Theme.Palette.secondaryText)
+                    .minimumHitTarget()
+            }
+            .padding(.horizontal, Theme.Space.m)
+        } else {
+            Button("Cancel") {
+                task?.cancel()
+                model.cancelCurrent()
+            }
+            .font(Theme.Font.callout)
+            .foregroundStyle(Theme.Palette.secondaryText)
+            .minimumHitTarget()
+        }
     }
 
     private func runAnalysis() async {
@@ -98,20 +148,21 @@ struct AnalysisView: View {
                 // more legible if you saw it complete.
                 try? await Task.sleep(for: .milliseconds(500))
                 await MainActor.run {
-                    model.path.append(.recipeSummary)
+                    model.navigate(to: .recipeSummary)
                 }
             } catch let error as ReframeError {
                 await MainActor.run {
                     if case .analysisCancelled = error { return }
-                    model.present(error)
-                    if !model.path.isEmpty { model.path.removeLast() }
+                    // Stay put and offer recovery here. Popping the screen and showing an alert
+                    // discarded the context the user needed to decide what to do.
+                    failure = error
+                    DiagnosticsLog.shared.failure("analysis", error.logDetail)
                 }
             } catch is CancellationError {
                 // Leaving the screen cancelled it. Nothing to report.
             } catch {
                 await MainActor.run {
-                    model.present(.analysisFailed(stage: "analysing", detail: "\(error)"))
-                    if !model.path.isEmpty { model.path.removeLast() }
+                    failure = .analysisFailed(stage: "analysing", detail: "\(error)")
                 }
             }
             progressTask.cancel()

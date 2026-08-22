@@ -127,32 +127,11 @@ struct RootView: View {
     }
 }
 
-enum Route: Hashable {
-    case referenceImport
-    case analysis(URL)
-    case recipeSummary
-    case contentImport
-    case mapping
-    case editor
-    case export
-    case templates
-    case settings
-
-    /// Short, path-free name for the diagnostics log.
-    var logName: String {
-        switch self {
-        case .referenceImport: return "reference"
-        case .analysis: return "analysis"
-        case .recipeSummary: return "summary"
-        case .contentImport: return "content"
-        case .mapping: return "mapping"
-        case .editor: return "editor"
-        case .export: return "export"
-        case .templates: return "templates"
-        case .settings: return "settings"
-        }
-    }
-}
+/// The app's route type *is* the engine's `AppRoute`.
+///
+/// Aliased rather than duplicated so the transition policy in `NavigationPolicy` — which CI
+/// tests — governs the real navigation, not a parallel copy that can drift from it.
+typealias Route = AppRoute
 
 /// `ReframeError` is an enum without `Identifiable`; this wraps it for `.sheet(item:)`.
 struct ErrorWrapper: Identifiable, Equatable {

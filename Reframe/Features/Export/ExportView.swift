@@ -325,7 +325,7 @@ struct ExportView: View {
                     SecondaryButton(title: "Share", systemImage: "square.and.arrow.up") { shareItem = url }
                 }
                 Button("Back to editing") {
-                    model.path.removeLast()
+                    model.goBack()
                 }
                 .font(Theme.Font.callout)
                 .foregroundStyle(Theme.Palette.secondaryText)

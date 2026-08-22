@@ -16,9 +16,29 @@ import UniformTypeIdentifiers
 @Observable
 final class AppModel {
 
-    // MARK: Navigation
+    // MARK: - Navigation
 
     var path: [Route] = []
+    //
+    // Every transition goes through `NavigationPolicy`, which CI tests. Screens express intent
+    // — advance, back, cancel — and never touch `path`. Previously twelve sites across eight
+    // files mutated it directly, which is how the analysis screen became a dead end: no single
+    // place described the flow, so no single place could guarantee an exit.
+
+    /// Moves forward. Transient states we are leaving are dropped from the path.
+    func navigate(to route: Route) {
+        path = NavigationPolicy.advance(path, to: route)
+    }
+
+    /// Moves back to this screen's declared destination — never merely "whatever is underneath".
+    func goBack() {
+        path = NavigationPolicy.back(path)
+    }
+
+    /// Abandons the current task and returns to its origin.
+    func cancelCurrent() {
+        path = NavigationPolicy.cancel(path)
+    }
     var presentedError: ErrorWrapper?
 
     // MARK: Services
@@ -127,12 +147,12 @@ final class AppModel {
 
     func startFromReference() {
         resetFlow()
-        path.append(.referenceImport)
+        navigate(to: .referenceImport)
     }
 
     func startFromScratch() {
         resetFlow()
-        path.append(.contentImport)
+        navigate(to: .contentImport)
     }
 
     /// Flow B: music first. The recipe is planned from the track's beats and energy once the
@@ -140,7 +160,7 @@ final class AppModel {
     func startFromMusicEdit() {
         resetFlow()
         wantsMusicEdit = true
-        path.append(.contentImport)
+        navigate(to: .contentImport)
     }
 
     /// Begins a project from a saved or built-in style.
@@ -149,7 +169,7 @@ final class AppModel {
         self.recipe = recipe
         // Starters carry no reference text worth reproducing; analysed recipes do.
         fidelity = .closeMatch
-        path.append(.contentImport)
+        navigate(to: .contentImport)
     }
 
     func resetFlow() {
@@ -430,7 +450,7 @@ final class AppModel {
         }
         await saveProject()
         Haptics.success()
-        path.append(.editor)
+        navigate(to: .editor)
     }
 
     // MARK: - Reference audio
@@ -713,7 +733,7 @@ final class AppModel {
         do {
             try FileManager.default.copyItem(at: url, to: destination)
             resetFlow()
-            path = [.referenceImport, .analysis(destination)]
+            path = NavigationPolicy.advance([.referenceImport], to: .analysis(destination))
         } catch {
             present(.fileAccessDenied(name: url.lastPathComponent))
         }
@@ -769,15 +789,15 @@ final class AppModel {
         case .retryAtLowerQuality:
             let canvas = document?.timeline.canvas ?? .reel1080
             exportSettings = ExportSettings.matching(canvas: canvas, shortSide: 720, preferHEVC: exportSettings.preferHEVC)
-            if path.last != .export { path.append(.export) }
+            navigate(to: .export)
         case .chooseDifferentFile:
             path = [.referenceImport]
         case .addMoreAssets:
-            if path.last != .contentImport { path.append(.contentImport) }
+            navigate(to: .contentImport)
         case .retry:
             // There is no generic retry — what to retry depends on where you are — so send the
             // user back one step, which is the screen the failed action was started from.
-            if path.count > 1 { path.removeLast() }
+            goBack()
         case .dismiss, .showScreenRecordingHelp, .waitForCooldown:
             break
         }

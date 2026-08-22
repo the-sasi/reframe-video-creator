@@ -44,7 +44,7 @@ struct HomeView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    model.path.append(.settings)
+                    model.navigate(to: .settings)
                 } label: {
                     Image(systemName: "gearshape")
                 }
@@ -161,7 +161,7 @@ struct HomeView: View {
                     detail: "\(model.templates.count) styles",
                     systemImage: "square.grid.2x2"
                 ) {
-                    model.path.append(.templates)
+                    model.navigate(to: .templates)
                 }
                 HomeTile(
                     title: "From Scratch",
@@ -281,7 +281,7 @@ struct HomeView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("Templates").font(Theme.Font.sectionTitle)
                 Spacer()
-                Button("See all") { model.path.append(.templates) }
+                Button("See all") { model.navigate(to: .templates) }
                     .font(.system(.caption, design: .rounded, weight: .semibold))
                     .foregroundStyle(Theme.Palette.accent)
             }

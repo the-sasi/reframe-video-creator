@@ -132,7 +132,7 @@ struct MappingView: View {
     /// route back to add more, is the honest version.
     private func shortfallBanner(_ recipe: EditRecipe) -> some View {
         Button {
-            model.path.removeLast()
+            model.goBack()
         } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 Image(systemName: "photo.badge.plus")

@@ -627,6 +627,6 @@ struct ContentImportView: View {
             "arranging \(model.assets.visuals.count) assets into \(slotCount) slots"
         )
         await model.arrangeAndBind()
-        model.path.append(.mapping)
+        model.navigate(to: .mapping)
     }
 }
